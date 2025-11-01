@@ -1,0 +1,8 @@
+numpy
+wotan
+matplotlib
+scipy
+sklearn.metrics
+lightkurve
+astropy
+astroquery
