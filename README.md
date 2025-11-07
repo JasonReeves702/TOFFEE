@@ -11,8 +11,12 @@ Software to de-trend and find flares in TESS data. Build to find epochs of incre
 
 TOFFEE is able to be installed on pip under the name star-toffee (toffee was already taken):
 
->>> pip install star_toffee
+```
+pip install star_toffee
+```
 
 Import TOFFEE into python script using toffee
 
->>> import toffee
+```
+import toffee
+```
