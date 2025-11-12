@@ -2,7 +2,7 @@ import os
 import requests
 from pathlib import Path
 
-tess_orbit_time_url = 'https://tess.mit.edu/public/files/TESS_FFI_observation_times.csv'
+tess_orbit_time_url = 'https://tess.mit.edu/public/files/TESS_orbit_times.csv'
 
 
 def get_local_file_path():

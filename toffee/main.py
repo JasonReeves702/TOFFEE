@@ -31,12 +31,12 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
     # Import Tess sector time data, to know when observation periods for the
     # sectors start and end.
     #get from tess.mit
-    tess_orbit_time_url = 'https://tess.mit.edu/public/files/TESS_FFI_observation_times.csv'
+    tess_orbit_time_url = 'https://tess.mit.edu/public/files/TESS_orbit_times.csv'
     Tess_orbit_times = download_csv_file(tess_orbit_time_url)
     #import
     Tess_sector_times= Table.read(Tess_orbit_times, format='ascii.csv')
-    Tess_start_times = Time(Tess_sector_times['Start Time'], format='iso', scale='utc')
-    Tess_end_times = Time(Tess_sector_times['End Time'], format='iso', scale='utc')
+    Tess_start_times = Time(Tess_sector_times['Start of Orbit'], format='iso', scale='utc')
+    Tess_end_times = Time(Tess_sector_times['End of Orbit'], format='iso', scale='utc')
     tess_start_times_tdb = Tess_start_times.tdb
     tess_end_times_tdb = Tess_end_times.tdb
     tess_start_times_bjd =  tess_start_times_tdb.jd - 2457000
@@ -172,14 +172,10 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                     break
                 elif prob_false < 0.2:
                     periodic = True
-                    peak_freq = frequency[np.where(power==power.max())[0][0]]
-                    half_window = int(0.5/peak_freq * 24 * 3600 / 120)
-                    lc_sine_wotan, sine_trend = wotan.flatten(orbit_t[orbit_mask],lc_working[orbit_mask],window_length=half_window*120/3600/24,method='median',return_trend=True)
-                    lc_sine[orbit_mask] = lc_sine[orbit_mask] / sine_trend
-                    lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / sine_trend
                     # else:
                         # print("SINE FLATTENED", end='\n')
-
+                        
+                    peak_freq = frequency[np.where(power==power.max())[0][0]]
                 if plot_results == True:
                     plot_t = orbit_t[orbit_mask]
                     plot_mask = np.abs(orbit_t - plot_t[-1]) < 5/peak_freq
@@ -189,8 +185,8 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                     plt.xlabel('Time (BJD - 2,7457,000)')
                     plt.ylabel('Normalised And Flattened flux')
                     # plt.plot(orbit_t[mask], scipy.ndimage.uniform_filter1d(lc_sine, size=10)[mask], c='orange', zorder=3, linewidth=3)
-                    # half_window = int(0.5/peak_freq * 24 * 3600 / 120)
-                    # lc_sine_wotan, sine_trend = wotan.flatten(orbit_t,lc_working,window_length=half_window*120/3600/24,method='median',return_trend=True)
+                    half_window = int(0.5/peak_freq * 24 * 3600 / 120)
+                    lc_sine_wotan, sine_trend = wotan.flatten(orbit_t,lc_working,window_length=half_window*120/3600/24,method='median',return_trend=True)
                     if half_window % 2 == 0:
                         window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window+1)
                         plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
@@ -198,7 +194,8 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                         window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window)
                         plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
                     plt.plot(orbit_t[mask], sine_trend[mask], c='red', zorder=2, linewidth=3)
-                    
+                    lc_sine[orbit_mask] = lc_sine[orbit_mask] / window_median[orbit_mask]
+                    lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / window_median[orbit_mask]
                     
                     plt.show()
         #     # print(sine_trend)
@@ -259,35 +256,11 @@ def break_finder(time, flux, min_break = 0.25):
 
         break_end_time.append(time[break_index + 1])
 
-        #figure out if its an orbit break or not
-        #if the middle of the sector is sandwhiched by the beginning and end of the break
-        #then it's the orbit break
-
-        if (time[break_index] < sector_mid_time) & (time[break_index + 1] > sector_mid_time):
-
-            break_type.append('Orbit')
-
-        else:
-
-            break_type.append('Reduction')
-
-
-    #After looping go back through, if there's only one break it's def the orbit??
-
-    if len(break_indices) == 1:
-
-        #if the only break is reduction, it's actually orbit
-
-        if break_type == ['Reduction']:
-
-            break_type = ['Orbit']
-
     #convert to dataframe
 
     sector_break_frame = pd.DataFrame({'Break_Index': pd.Series(break_indices, dtype = int),
                                        'Break_Start_Time': pd.Series(break_start_time, dtype = float),
-                                       'Break_End_Time': pd.Series(break_end_time, dtype = float),
-                                       'Break_Type': pd.Series(break_type, dtype = str)})
+                                       'Break_End_Time': pd.Series(break_end_time, dtype = float)})
     
     return sector_break_frame
 
@@ -642,7 +615,7 @@ def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare
 
     secondary_color = string variable for the color of the points associated with a secondary flare event.
 
-    terciary_color = string variable for the color of the points associated with a terciary flare event.
+    tertiary_color = string variable for the color of the points associated with a tertiary flare event.
 
     cadence_color = string variable for the color of the TESS photometry points not associated with flares.
 
@@ -2352,73 +2325,73 @@ def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare
 
                                     #indices of the secondary secondary flare
                                     
-                                    terciary_flare_indices = np.where((labeled_array == value))[0]
+                                    tertiary_flare_indices = np.where((labeled_array == value))[0]
                                     
 
                                     #find amp and t-peak
 
-                                    terciary_peak_index = np.where((normalized_flux[decay_indices] == 
-                                                                 max(normalized_flux[decay_indices][terciary_flare_indices])))[0]
+                                    tertiary_peak_index = np.where((normalized_flux[decay_indices] == 
+                                                                 max(normalized_flux[decay_indices][tertiary_flare_indices])))[0]
 
                                     #quickly pull out the amp of the secondary
                     
-                                    terciary_flare_amp = res[terciary_peak_index][0]
+                                    tertiary_flare_amp = res[tertiary_peak_index][0]
                 
                                     #and the amplitude in terms of sigma
                 
-                                    terciary_flare_amp_sigma = terciary_flare_amp/(flux_std)
+                                    tertiary_flare_amp_sigma = tertiary_flare_amp/(flux_std)
 
                                     #with the residual we can also calculate the equivalent duration
 
-                                    terciary_equivalent_duration = np.trapz(res[terciary_flare_indices],
-                                             x = time[terciary_flare_indices + time_peak_flare_index + 4])
+                                    tertiary_equivalent_duration = np.trapz(res[tertiary_flare_indices],
+                                             x = time[tertiary_flare_indices + time_peak_flare_index + 4])
 
-                                    terciary_equivalent_duration *= 86400
+                                    tertiary_equivalent_duration *= 86400
 
-                                    #set the index of the terciary to be along the whole lightcurve
+                                    #set the index of the tertiary to be along the whole lightcurve
                                     #rather than just in the rise
 
 
-                                    terciary_flare_indices += time_peak_flare_index + 4
+                                    tertiary_flare_indices += time_peak_flare_index + 4
 
-                                    terciary_peak_index += time_peak_flare_index + 4
+                                    tertiary_peak_index += time_peak_flare_index + 4
                 
 
-                                    #print(time[terciary_peak_index])
+                                    #print(time[tertiary_peak_index])
                 
                                     
-                                    if normalized_flux[terciary_peak_index][0] > median_flux + magic_flare_std * flux_std:
+                                    if normalized_flux[tertiary_peak_index][0] > median_flux + magic_flare_std * flux_std:
                 
                                         #now we can get the amp and the time
                                         #right now it's pretty rudimentary and we just have the beginning and end in the same
                                         #timw as the peak with no calculated equivalent duration, but that will be later work
                     
-                                        flare_peak_times.append(time[terciary_peak_index][0])
+                                        flare_peak_times.append(time[tertiary_peak_index][0])
                             
-                                        flare_start_times.append(time[min(terciary_flare_indices)])
+                                        flare_start_times.append(time[min(tertiary_flare_indices)])
                             
-                                        flare_end_times.append(time[max(terciary_peak_index)])
+                                        flare_end_times.append(time[max(tertiary_peak_index)])
                             
                                         #make sure to subtract one from the fluxes to isolate
                                         #the amp of the flare
                             
-                                        flare_amps.append(terciary_flare_amp)
+                                        flare_amps.append(tertiary_flare_amp)
                     
                                         #########LATER WORK: CALCULATE THE ENERGY FOR THESE FLARES#######
                             
-                                        flare_equivalent_durations.append(terciary_equivalent_duration)
+                                        flare_equivalent_durations.append(tertiary_equivalent_duration)
                 
                 
                                         ############ADD THE FLAGS#############
                 
                                         #this was a secondary detection
                 
-                                        primary_or_secondary.append('terciary')
+                                        primary_or_secondary.append('tertiary')
                 
                 
                                         #there are at least three points in the flare, it's given by the bright points argument
                 
-                                        num_in_sec = len(np.where((normalized_flux[terciary_peak_index]))[0])
+                                        num_in_sec = len(np.where((normalized_flux[tertiary_peak_index]))[0])
                 
                                         points_in_flare.append(num_in_sec)
                 
@@ -2430,7 +2403,7 @@ def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare
                 
                                         ##And the amp sigma
                 
-                                        amp_sigma.append(terciary_flare_amp_sigma)
+                                        amp_sigma.append(tertiary_flare_amp_sigma)
 
                                         #################VISUALIZING THE FIT################
 
@@ -2463,9 +2436,9 @@ def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare
                                                         marker = '*', s = 100, color = secondary_color,
                                                         zorder = 6, label = 'Secondary Flare')
 
-                                            plt.scatter(time[terciary_peak_index][0], normalized_flux[terciary_peak_index][0],
+                                            plt.scatter(time[tertiary_peak_index][0], normalized_flux[tertiary_peak_index][0],
                                                         marker = '*', s = 100, color = tertiary_color,
-                                                        zorder = 10, label = 'Terciary Flare')
+                                                        zorder = 10, label = 'Tertiary Flare')
                                             
                                                 
                                             plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std),
@@ -3037,8 +3010,8 @@ def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare
 
             #Subract one to isolate contribution from flare
 
-            equivalent_duration = np.trapz(normalized_flux[time_start_flare_index:time_end_flare_index] - median_flux,
-                                           x = time[time_start_flare_index:time_end_flare_index])
+            equivalent_duration = np.trapz(normalized_flux[time_start_flare_index:time_end_flare_index+1] - median_flux,
+                                           x = time[time_start_flare_index:time_end_flare_index+1])
 
             #covert to seconds
 
