@@ -172,10 +172,14 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                     break
                 elif prob_false < 0.2:
                     periodic = True
+                    peak_freq = frequency[np.where(power==power.max())[0][0]]
+                    half_window = int(0.5/peak_freq * 24 * 3600 / 120)
+                    lc_sine_wotan, sine_trend = wotan.flatten(orbit_t[orbit_mask],lc_working[orbit_mask],window_length=half_window*120/3600/24,method='median',return_trend=True)
+                    lc_sine[orbit_mask] = lc_sine[orbit_mask] / sine_trend
+                    lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / sine_trend
                     # else:
                         # print("SINE FLATTENED", end='\n')
-                        
-                    peak_freq = frequency[np.where(power==power.max())[0][0]]
+
                 if plot_results == True:
                     plot_t = orbit_t[orbit_mask]
                     plot_mask = np.abs(orbit_t - plot_t[-1]) < 5/peak_freq
@@ -185,8 +189,8 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                     plt.xlabel('Time (BJD - 2,7457,000)')
                     plt.ylabel('Normalised And Flattened flux')
                     # plt.plot(orbit_t[mask], scipy.ndimage.uniform_filter1d(lc_sine, size=10)[mask], c='orange', zorder=3, linewidth=3)
-                    half_window = int(0.5/peak_freq * 24 * 3600 / 120)
-                    lc_sine_wotan, sine_trend = wotan.flatten(orbit_t,lc_working,window_length=half_window*120/3600/24,method='median',return_trend=True)
+                    # half_window = int(0.5/peak_freq * 24 * 3600 / 120)
+                    # lc_sine_wotan, sine_trend = wotan.flatten(orbit_t,lc_working,window_length=half_window*120/3600/24,method='median',return_trend=True)
                     if half_window % 2 == 0:
                         window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window+1)
                         plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
@@ -194,8 +198,7 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                         window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window)
                         plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
                     plt.plot(orbit_t[mask], sine_trend[mask], c='red', zorder=2, linewidth=3)
-                    lc_sine[orbit_mask] = lc_sine[orbit_mask] / window_median[orbit_mask]
-                    lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / window_median[orbit_mask]
+                    
                     
                     plt.show()
         #     # print(sine_trend)
