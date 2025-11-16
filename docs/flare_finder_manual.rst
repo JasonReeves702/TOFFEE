@@ -252,25 +252,25 @@ flare_equivalent_durations: Used for finding the energies. Defined as the equiva
 
 primary_or_secondary: Label telling how this flare was found. Comes in four flavors.
 
-                      "primary": Means this is a flare that was found where the peak was identified,
-                                 it was modeled, and passed the checks. There may or may not have been
-                                 a fit applied to the rise and decay. There may or may nor have been a
-                                 secondary found to this flare.
-                      
-                      "primary_dbl_fit_failed": A special type of primary flare in which a double exponential
-                                                was fit to the decay with no secondary found. However it seemed
-                                                like there was possibly another flare that was just missed so it
-                                                tried to refit the decay and still didn't find a secondary. We keep
-                                                track of these to see the relative success of these attempted refittings
-                                                to find more secodnary flares.
+"primary": Means this is a flare that was found where the peak was identified,
+   it was modeled, and passed the checks. There may or may not have been
+   a fit applied to the rise and decay. There may or may nor have been a
+   secondary found to this flare.
 
-                     "secondary": Means this flare was found within a primary flare. It may be in the rise or the decay.
-                                  It was found on the first attempt of fitting a model to the rise and decay with no need
-                                  for a refit
+"primary_dbl_fit_failed": A special type of primary flare in which a double exponential
+                  was fit to the decay with no secondary found. However it seemed
+                  like there was possibly another flare that was just missed so it
+                  tried to refit the decay and still didn't find a secondary. We keep
+                  track of these to see the relative success of these attempted refittings
+                  to find more secodnary flares.
 
-                     "secondary_second_try": A special type of secondary that was found in the decay of a flare only
-                                             after refitting the model without brighter points that affected the first
-                                             fit
+"secondary": Means this flare was found within a primary flare. It may be in the rise or the decay.
+    It was found on the first attempt of fitting a model to the rise and decay with no need
+    for a refit
+
+"secondary_second_try": A special type of secondary that was found in the decay of a flare only
+               after refitting the model without brighter points that affected the first
+               fit
 
 
 points_in_flare: Number of flux points identified with the flare.
