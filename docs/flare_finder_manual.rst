@@ -74,10 +74,10 @@ flag_values: A list of the acceptable flag values you want to include in the ana
 
 detrend: boolean value representing whether or not to detrend the lightcurve. 
 
-         If True TOFFEE will detrend using in-built function. If not, TOFFEE will skip this
-         and go straight to detection. TOFFEE relies on detrending to find flare signals however
-         if the lightcurve has been detrended beforehand using a different, preferred method you
-         may want to skip detrending again which may eat into the flare signal.
+If True TOFFEE will detrend using in-built function. If not, TOFFEE will skip this
+and go straight to detection. TOFFEE relies on detrending to find flare signals however
+if the lightcurve has been detrended beforehand using a different, preferred method you
+may want to skip detrending again which may eat into the flare signal.
 
 window_length: float value representing the window length of wotan detrending (Hippke et al. (2019, AJ, 158, 143)).
 
@@ -106,38 +106,38 @@ magic_flare_std: Integer or float value greater than 0. Sets the threshold for d
 
 consecutive: boolean value representing how a primary flare will be determined. 
 
- If true a flare will be counted only if three consecutive points are above the threshold.
- This is consistent with many other threshold-based methods. It's easy to follow and generally
- works well. However, for some detrendended lightcurves certain artifacts of the detrending
- may pop up as false-positive signals.
- 
- If false a flare will be counted even if not every point is above the threshold.
+If true a flare will be counted only if three consecutive points are above the threshold.
+This is consistent with many other threshold-based methods. It's easy to follow and generally
+works well. However, for some detrendended lightcurves certain artifacts of the detrending
+may pop up as false-positive signals.
 
- The non-consecutive case which we call the 'three in four rule' works to both include low amp
- flares that don't have three consecutive points above the threshold and rule out signals that
- result from detrending artifacts. It works by starting from the peak of the flare and looking
- to the left to find the start of the flare. A flare is considered to have begun when the next
- three points to the left of some cadence all lie well under the threshold (1σ less than the threshold).
- Then the code looks to the right, saying a flare has ended when the next three points to the right of some cadence
- are all well below the threshold (1σ less than the threshold). In this way we try to say with confidence that
- a flare event has truly begun and ended and can include points below the threshold.
+If false a flare will be counted even if not every point is above the threshold.
 
- Then TOFFEE reads where the first point associated with the flare was above the threshold and where
- the last point associated with the flare was above the threshold. If 75% of the points between them are
- above the flux threshold then we call it a flare as we see a true signal. So if there's a small signal where
- there are three cadences above the threshold separated by one cadence below the threshold it's still a flare.
- In practice this one cadence below the threshold is only just below the threshold of detection so visually
- it still passes as a flare.
+The non-consecutive case which we call the 'three in four rule' works to both include low amp
+flares that don't have three consecutive points above the threshold and rule out signals that
+result from detrending artifacts. It works by starting from the peak of the flare and looking
+to the left to find the start of the flare. A flare is considered to have begun when the next
+three points to the left of some cadence all lie well under the threshold (1σ less than the threshold).
+Then the code looks to the right, saying a flare has ended when the next three points to the right of some cadence
+are all well below the threshold (1σ less than the threshold). In this way we try to say with confidence that
+a flare event has truly begun and ended and can include points below the threshold.
 
- While catching low amp flares it also catches incomplete detrending where there is residual modulation.
- Leftover red noise can occasianally rise above the flux threshold being falsly flagged as a flare. This condition
- helps to eliminate such false-positives because they tend to fluctuate around the threshold for a while, causing
- the fraction of points above the threshold as opposed to below the threshold to be lower than 75%.
+Then TOFFEE reads where the first point associated with the flare was above the threshold and where
+the last point associated with the flare was above the threshold. If 75% of the points between them are
+above the flux threshold then we call it a flare as we see a true signal. So if there's a small signal where
+there are three cadences above the threshold separated by one cadence below the threshold it's still a flare.
+In practice this one cadence below the threshold is only just below the threshold of detection so visually
+it still passes as a flare.
 
- The only catch is the case where a flare occurs during this positive modulation. In that case it's quite tricky
- to recover them. To save quality signals we still recover the flares if the amplitude is sufficiently high.
- Sufficiently high is defined as being 1.5x the original flux threshold for detection. This typically finds obvious
- flares while keeping away false-positive detection when using the typical threshold value of 3σ.
+While catching low amp flares it also catches incomplete detrending where there is residual modulation.
+Leftover red noise can occasianally rise above the flux threshold being falsly flagged as a flare. This condition
+helps to eliminate such false-positives because they tend to fluctuate around the threshold for a while, causing
+the fraction of points above the threshold as opposed to below the threshold to be lower than 75%.
+
+The only catch is the case where a flare occurs during this positive modulation. In that case it's quite tricky
+to recover them. To save quality signals we still recover the flares if the amplitude is sufficiently high.
+Sufficiently high is defined as being 1.5x the original flux threshold for detection. This typically finds obvious
+flares while keeping away false-positive detection when using the typical threshold value of 3σ.
 
 prim_marg_rate: float value from 0.0 to 1.0 representing the threshold value for a cadence to be
                 consideres a part of a flare. Rather than being the sigma threshold itslef it's a
