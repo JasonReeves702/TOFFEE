@@ -31,10 +31,8 @@ peak flux (not necessarily amplitude) than the primary.
 All the other bright points above the threshold that were found to belong
 to this flare are thrown out and the code moves onto the next peak and starts again.
 
-'''
 
-
-'''ARGUMENTS
+ARGUMENTS
 
 The only necessary bits to get the code to run are the data points: the time, flux, flux_err, and quality. 
 
@@ -64,6 +62,8 @@ quality: 1D array-like object representing the quality flags of the cadences fro
          an array of equal length to the time, flux, and flux_err arrays and fill it with the value 0.
 
 time, flux, flux_err, and quality should be 1D array-like objects of equal size
+
+
 
 LIGHTCURVE PREPARATION
 
@@ -218,11 +218,7 @@ TESS_sector = integer variable for the TESS Sector Number from which the lightcu
 
 
 
-'''
-
-
-
-'''RETURNS
+RETURNS
 
 The returns of the code are a suite of physical and data based measurements:
 
@@ -289,9 +285,8 @@ amp_sigma: The amplitude of the flare divided by the spread of the photometric p
            flare rises relative to the noise of the lightcurve.
 
 
-'''
 
-'''FUTURE WORK
+FUTURE WORK
 
 TOFFEE is always looking for improvement in performance and flexibility. There are a few outstanding challenges for the
 project in terms of secondary detection. 
@@ -311,4 +306,3 @@ when the program lands on a solution TOFFEE just goes ahead to detect flare sign
 We're adding filtering so you can only search for flares on lightcurves for which the detrending 
 actually flattens the light curve.
 
-'''
