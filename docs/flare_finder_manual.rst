@@ -1,4 +1,4 @@
-'''INTRO
+INTRO
 
 Welcome, this is the TESS Overlapping Flare Finder and Energy Evaluator
 (TOFFEE) flare finder
