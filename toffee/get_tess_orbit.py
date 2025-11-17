@@ -4,12 +4,14 @@ from pathlib import Path
 
 tess_orbit_time_url = 'https://tess.mit.edu/public/files/TESS_orbit_times.csv'
 
+tess_FFI_time_url = 'https://tess.mit.edu/public/files/TESS_FFI_observation_times.csv'
+
 
 def get_local_file_path():
     'Determine a consistent local file path'
     local_dir = Path(__file__).resolve().parent / ".cache"
     os.makedirs(local_dir, exist_ok=True)
-    return local_dir / 'TESS_orbit_times.csv'
+    return local_dir / 'tess_orbit_time.csv'
 
 
 
