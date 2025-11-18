@@ -3,8 +3,8 @@ pandas
 wotan
 matplotlib
 scipy
-sklearn.metrics
-lightkurve
+sklearn.metrics > 1.7
+lightkurve > 2.5
 oktopus
 astropy
 astroquery
