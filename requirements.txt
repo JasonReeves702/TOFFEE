@@ -2,10 +2,10 @@ numpy >= 2.0
 pandas
 wotan
 matplotlib
-scipy
+scipy > 1.10
 sklearn.metrics > 1.7
 lightkurve > 2.5
 oktopus
-astropy
+astropy > 1.6
 astroquery
 pathlib
