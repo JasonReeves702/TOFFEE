@@ -13,4 +13,4 @@ Then run pytest on the test files using
 !pytest --pyargs toffee.tests
 ```
 
-It should take about 20 seconds to run
+It should take about 10 seconds to run
