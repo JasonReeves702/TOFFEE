@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "star_toffee"
-version = "0.0.41"
+version = "0.0.44"
 authors = [
   { name="Jason Reeves", email="jasonree702@gmail.com" },
 ]
@@ -26,4 +26,8 @@ Issues = "https://github.com/JasonReeves702/TOFFEE/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"} 
-packages = ["toffee"] 
+#packages = ["toffee"]
+
+[tool.setuptools.packages.find]
+where = ["src"]              
+include = ["toffee*", "toffee.tests*"]
