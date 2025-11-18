@@ -5,6 +5,7 @@ matplotlib
 scipy
 sklearn.metrics
 lightkurve
+oktopus
 astropy
 astroquery
 pathlib
