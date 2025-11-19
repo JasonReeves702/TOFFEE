@@ -3,7 +3,7 @@
 TOFFEE is pip-installable under the name star-toffee:
 
 ```python
-pip install star-toffee
+pip install star_toffee
 ```
 
 Once TOFFEE is installed on your device you can import it to a script or notebook using:
