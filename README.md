@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/6e1ee6c5-bba1-48f6-bc4c-62407fb0cd12" width="385" height="223" alt="TOFFEE_Logo" />
+  <img src="https://github.com/user-attachments/assets/6e1ee6c5-bba1-48f6-bc4c-62407fb0cd12" width="462" height="268" alt="TOFFEE_Logo" />
+  <figcaption>
+    <i class="photo-credit">Logo Credit: Alexis Antonopoulos.</i>
+  </figcaption>
 </p>
-
-Logo Credit: Alexis Antonopoulos
 
 # TOFFEE
 Software to de-trend and find flares in TESS data. Build to find epochs of increased emission and distinguish overlapping flare events to be complete down to short wait times.
