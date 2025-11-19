@@ -37,3 +37,18 @@ TOFFEE is still under development on GitHub and on PyPI. If you notice a bug or 
 
 TOFFEE is built upon the work of previous studies in flare detection and modeling. Depending on your specific goals you may want to consider the following papers:
 
+[1] Mosteller, Frederick, and John Wilder Tukey. Data Analysis and Regression. Pearson, 1977.
+
+[2] Ilin, E. et al. Flares in open clusters with K2. II. Pleiades, Hyades, Praesepe,Ruprecht 147, and M 67. 645, A42 (2021).
+
+[3]  Davenport, J. R. A. et al. Kepler flares. ii. the temporal morphology of white-light flares on gj 1243. The Astrophysical Journal 797, 122 (2014). URL https://dx.doi.org/10.1088/0004-637X/797/2/122.
+
+[4] Yang, H. & Liu, J. The Flare Catalog and the Flare Activity in the Kepler Mission. 241, 29 (2019).
+
+[5] Howard, W. S. & MacGregor, M. A. No such thing as a simple flare: Substructure and quasi-periodic pulsations observed in a statistical sample of 20 s cadence tess flares. The Astrophysical Journal 926, 204 (2022). URL https://dx.doi.org/10.3847/1538-4357/ac426e.
+
+[6] Chang, S. W., Byun, Y. I. & Hartman, J. D. Photometric Study on Stellar Magnetic Activity. I. Flare Variability of Red Dwarf Stars in the Open Cluster M37. 814, 35 (2015).
+
+[7] Pitkin, M., Williams, D., Fletcher, L. & Grant, S. D. T. A bayesian method for detecting stellar flares. Monthly Notices of the Royal Astronomical Society 445, 2268–2284 (2014). URL https://doi.org/10.1093/mnras/stu1889.
+
+[8] Rivera, E. C., Johnson, J. R., Homan, J. & Wing, S. How noise thresholds affect the information content of stellar flare sequences. 670, A143 (2023).
