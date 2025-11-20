@@ -1,7 +1,7 @@
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6e1ee6c5-bba1-48f6-bc4c-62407fb0cd12" width="462" height="268" alt="TOFFEE_Logo" />
   <figcaption>
-    <i class="photo-credit">Logo Credit: Alexis Antonopoulos.</i>
+    <i class="photo-credit">Logo Credit: Alexis Antonopoulos</i>
   </figcaption>
 </p>
 
