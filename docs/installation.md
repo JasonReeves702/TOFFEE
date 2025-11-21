@@ -12,6 +12,8 @@ Once TOFFEE is installed on your device you can import it to a script or noteboo
 import toffee
 ```
 
+The pip installation automatically installs all dependent packages and updates them to their required version.
+
 To update star-toffee to the newest version open terminal and enter:
 
 ```python
