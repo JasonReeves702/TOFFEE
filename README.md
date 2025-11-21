@@ -23,12 +23,12 @@ import toffee
 ```
 ## Getting Started
 
-For more information on running TOFFEE consult the [flare_finder manual page](https://github.com/JasonReeves702/TOFFEE/blob/main/docs/flare_finder_manual.rst) and the [tutorials](https://github.com/JasonReeves702/TOFFEE/tree/main/tutorials)
+For more information on running TOFFEE consult the [flare_finder manual page](https://github.com/JasonReeves702/TOFFEE/blob/main/docs/flare_finder_manual.rst) and the [tutorials](https://github.com/JasonReeves702/TOFFEE/tree/main/tutorials). Information on running the test script for TOFFEE can be found in the [docs](https://github.com/JasonReeves702/TOFFEE/edit/main/README.md#:~:text=pyproject.toml-,running_tests,-.md).
 
 
 ## How to Cite this Work
 
-If you end up using this work please be sure to cite the relevant papers describing it's creation: Pratt et al. 2025 (submitted) and Reeves et al. 2025 (submitted). As of December 2025 both of these papers have not been accepted. Be sure to check back for updates in where to find the papers when they're published.
+If you end up using this work please be sure to cite the relevant papers describing it's creation: Pratt et al. 2025 (submitted) and Reeves et al. 2025 (in prep.). As of December 2025 both of these papers have not been accepted. Be sure to check back for updates in where to find the papers when they're published.
 
 ## Issues?
 
