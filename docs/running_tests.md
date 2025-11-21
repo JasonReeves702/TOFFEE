@@ -1,13 +1,13 @@
 ## Running the Test Functions
 
-To run the test files in TOFFEE using pytest import toffee and pytest
+To run the test files in TOFFEE using pytest import toffee and pytest:
 
 ```python
 import toffee
 import pytest
 
 ```
-Then run pytest on the test files by opening up terminal and running
+Then run pytest on the test files by opening up terminal and running:
 
 ```python
 !pytest --pyargs toffee.tests
