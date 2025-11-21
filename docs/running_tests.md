@@ -7,7 +7,7 @@ import toffee
 import pytest
 
 ```
-Then run pytest on the test files using
+Then run pytest on the test files by opening up terminal and running
 
 ```python
 !pytest --pyargs toffee.tests
