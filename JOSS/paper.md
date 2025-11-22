@@ -1,40 +1,30 @@
 ---
-
 title: '`TOFFEE`: A Threshold-Based Method to Find Close and Overlapping Flares in TESS Lightcurves'
 tags:
-- Python
-- stellar activity
-- lightcurve detrending
-- flare detection
-
+ - Python
+ - stellar activity
+ - lightcurve detrending
+ - flare detection
 authors:
-
-- name: Jason R. Reeves
-affiliation: 1
-
-- name: Andrew Zhang
-affiliation: 1
-
-- name: David V. Martin
-orcid: https://orcid.org/0000-0002-7595-6360
-affiliation: 1
-
-- name: Veronica G. Pratt
-orcid:
-affiliation: 1
-
-- name: S. Edelman
-orcid:
-affiliation: 1
- 
+ - name: Jason R. Reeves
+   affiliation: 1
+ - name: Andrew Zhang
+   affiliation: 1
+ - name: David V. Martin
+   orcid: https://orcid.org/0000-0002-7595-6360
+   affiliation: 1
+ - name: Veronica G. Pratt
+   orcid:
+   affiliation: 1
+ - name: S. Edelman
+   orcid:
+   affiliation: 1
 affiliations:
- 
-- index: 1
-name: Department of Physics and Astronomy, Tufts University, 574 Boston Ave, Medford, 02155, MA, USA
+ - index: 1
+   name: Department of Physics and Astronomy, Tufts University, 574 Boston Ave, Medford, 02155, MA, USA
 
 date: 22 September 2025
 bibliography: bibliography.bib
-
 ---
 
 # Summary
