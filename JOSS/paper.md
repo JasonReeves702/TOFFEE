@@ -7,6 +7,7 @@ tags:
  - flare detection
 authors:
  - name: Jason R. Reeves
+   orcid: https://orcid.org/0009-0002-9757-0351
    affiliation: 1
  - name: Andrew Zhang
    affiliation: 1
