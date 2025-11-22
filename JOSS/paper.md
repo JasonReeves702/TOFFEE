@@ -49,3 +49,7 @@ There is an assortment of public softwares designed to detect and measure flarin
 # Applications
 
 `TOFFEE` has thus far been applied to two projects submitted to publication. The software's core functionality has been used to develop a flare catlog complete to short wait times to analyze the presence of symathetic flaring in a sample of stars (Pratt et al., under review). Additionally, the program has been used to study the correlation between flare occurance and spot presence on a wide sample of stellar targets, targeted to analyzing effects of statistical bias (Zhang et al., submitted).
+
+# Acknowledgments
+
+We acknowlege that valuable early work from Andrew Korkus who contributed to the early work of the science question that led to the creation of this software. 
