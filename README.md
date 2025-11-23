@@ -28,7 +28,7 @@ For more information on running TOFFEE consult the [flare_finder manual page](ht
 
 ## How to Cite this Work
 
-If you end up using this work please be sure to cite the relevant papers describing it's creation: Pratt et al. 2025 (submitted) and Reeves et al. 2025 (in prep.). As of December 2025 both of these papers have not been accepted. Be sure to check back for updates in where to find the papers when they're published.
+If you end up using this work please be sure to cite the relevant papers describing it's creation: Pratt et al. 2025 (submitted) and Reeves et al. 2025 (submitted). As of December 2025 neither of these papers have been accepted. Be sure to check back for updates in where to find the papers when they're published.
 
 ## Issues?
 
