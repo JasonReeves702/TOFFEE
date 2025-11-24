@@ -12,7 +12,7 @@ authors:
  - name: Andrew Zhang
    affiliation: 1
  - name: David V. Martin
-   orcid: https://orcid.org/0000-0002-7595-6360
+   orcid: 0000-0002-7595-6360
    affiliation: 1
  - name: Veronica G. Pratt
    orcid:
