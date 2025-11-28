@@ -6,7 +6,7 @@
 </p>
 
 # TOFFEE
-Software to de-trend and find flares in TESS data. Build to find epochs of increased emission and distinguish overlapping flare events to be complete down to short wait times.
+Astrophysical software to de-trend and find flares in TESS data. Build to find epochs of increased emission and distinguish overlapping flare events to be complete down to short wait times.
 
 ## Installation
 
