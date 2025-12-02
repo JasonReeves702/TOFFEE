@@ -10,15 +10,13 @@ authors:
    orcid: 0009-0002-9757-0351
    affiliation: 1
  - name: Andrew Zhang
+   orcid: 0009-0005-6169-6413
    affiliation: 1
  - name: David V. Martin
    orcid: 0000-0002-7595-6360
    affiliation: 1
  - name: Veronica G. Pratt
-   orcid:
-   affiliation: 1
- - name: S. Edelman
-   orcid:
+   orcid: 0009-0001-8728-6894
    affiliation: 1
 affiliations:
  - index: 1
