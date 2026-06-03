@@ -214,55 +214,35 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
 
 
 
-
-
-
-
 def break_finder(time, flux, min_break = 0.25):
-
     #find the differences of all the time coordinates and determine if
     #they're long enough to be called a break from min_break
-
     time_diffs = np.append(False, np.diff(time) > min_break)
 
     #find where that break is, this will tabulate the right hand side of the break(s)
-
     end_of_time_breaks = np.where(time_diffs == True)[0]
 
     #and the beginning of the breaks which come right before
-
     lightcurve_break_index = end_of_time_breaks -1
 
     #determine which belongs to the orbit break
-
     #############INITIALIZE ARRAYS TO HOLD BREAKS AND TYPE OF BREAK#############
-
     break_indices = []
-
     break_start_time = []
-
     break_end_time = []
-
     break_type = []
 
     #find the time of the middle of the sector
-
     sector_mid_time = (max(time) + min(time))/2
 
     #loop through breaks and find which one contains this time
-
     for break_index in lightcurve_break_index:
-
         #add the features of this break to the lists
-
         break_indices.append(break_index)
-
         break_start_time.append(time[break_index])
-
         break_end_time.append(time[break_index + 1])
 
     #convert to dataframe
-
     sector_break_frame = pd.DataFrame({'Break_Index': pd.Series(break_indices, dtype = int),
                                        'Break_Start_Time': pd.Series(break_start_time, dtype = float),
                                        'Break_End_Time': pd.Series(break_end_time, dtype = float)})
@@ -273,472 +253,685 @@ def break_finder(time, flux, min_break = 0.25):
 
 
 
-
 def light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200):
-
-
     #####################find the breaks###################
-
     #Use breakfinder to find the break(s) from TESS sector and clip off cadences
     #from either side of the breaks
-
     sector_break_frame = break_finder(time, flux, min_break = min_break)
 
     #pull out indices of breaks
-
     break_index = sector_break_frame['Break_Index']
 
     #convert to numpy array
-
     break_index = np.array(break_index)
 
     #loop through and build boolean array of the points we want to keep in the lightcurve
     #need to account for the breaks that are smaller than the number of points we want to clip
-
     light_curve_break_mask = np.full(len(time), 1, dtype = bool)
 
     #boolean arguments to see if we need to clip anything at the beginning or end or if it's already
     #been done
-
     clip_start = True
-
     clip_end = True
-
     j = 0 
 
     while j < len(break_index):
-
         index = break_index[j]
 
         #check to the left to see if the length between the left side of the
         #first break isn't close to the beginning of the curve or close to the other breaks
-
         if j == 0:
-
             if break_index[j] <= 2 * clip_breaks:
 
                 #if close to beginning clip everyhing up to the start of the break
-
                 clip_left = index
 
                 #also set boolean argument to clip the first cadences ofhe lightcurve to
                 #false so we don't clip anything else
-
                 clip_start = False
 
         #otherwise use normal amount
-
             else:
-        
                 clip_left = clip_breaks
-
-        
+                
         #check to the left, ideally this was already taken care of this in the previous
         #iteration when looking to the right
-
         if j > 0:
-
             #we want to make this twice the length of the break_clips argument
             #because we're reaching some length to the right of one breaks AND
             #some length of cadences to the left of the other to check if they overlap
-
             if break_index[j] - break_index[j - 1] <= 2 * clip_breaks:
-
                 #clip nothing, should've already been done
-
                 clip_left = 0
-
+                
             #otherwise use normal amount
-
             else:
-    
                 clip_left = clip_breaks
-
 
         #Now look to the right to see if we're close to the end of the light curve
         #or another break in the curve
-
         if j == len(break_index) - 1:
-
             if break_index[j] > len(time) - (2 * clip_breaks):
 
                 #if close to the end for the last break then clip everything to the end
-
                 clip_right = len(time) - clip_breaks
 
                 #also set boolean argument to clip the last cadences of the lightcurve
                 #to false
-
                 clip_end = False
 
             else:
-    
                 clip_right = clip_breaks
 
         #check to see if we're close to another break
-
         if j < len(break_index) - 1:
-
             #we want to make this twice the length of the break_clips argument
             #because we're reaching some length to the right of one breaks AND
             #some length of cadences to the left of the other to check if they overlap
-
             if break_index[j + 1] - break_index[j] <= 2 * clip_breaks:
-
                 #clip everyhing between them
-
                 clip_right = break_index[j + 1] - break_index[j]
 
             else:
-
                 clip_right = clip_breaks
 
-
         #add these indices to the mask as false values
-
         #clip stuff to the left of the break
-
         mask_left_start = index - clip_left
-
         light_curve_break_mask[mask_left_start:index + 1] = False
-
         mask_right_end = index + clip_right
-
         light_curve_break_mask[index:mask_right_end] = False
-
         j += 1
-            
-            
 
     #Now clip the beginning and end if still needed
-
     if clip_start == True:
-
         light_curve_break_mask[0:clip_breaks] = False
-
     if clip_end == True:
-
         light_curve_break_mask[len(time) - clip_breaks:len(time)] = False
-
-
     return light_curve_break_mask
 
 
+#Input lightcurve information and get out times and fluxes of bright points
+#above a given threshold
+def find_candidates(time, flux, flux_std, threshold_std):
 
+    '''Arguments:
 
+    time: time coordinates of the lightcurve
+    flux: flux values in the lightcurve corresponding to the times
+    flux_std: global spead of flux values, sets σ
+    threshold_std: the threshold in σ of what defines a bright point
+    '''
 
+    '''Outputs:
+    time_candidates: 1D array holding the times for points that lie above the flux threshold
+    bright_points: 1D array holding the fluxes for the points above the threshold corresponding to the times
+    '''
+    #Find flux threshold
+    flux_threshold = 1 + (threshold_std * flux_std)
 
-def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare_std = 2.0,
-                 prim_marg_rate = 0.67, sec_marg_rate = 0.75, consecutive = False,  rise_func = 'gaussian', visualize_fit = False,
-                 fit_twice = False, rate_above_threshold = 0.75, fit_multiple_secs = False, flag_values = [0], detrend = True,
-                 window_length = 0.25, periodogram = None, clip_breaks = 100, min_break = 0.25,
-                 primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green',
-                 cadence_color = 'black', threshold_color = 'red', fit_color = 'black',
-                 fontsize = 14, labelsize = 12, TIC_number = 0, TESS_sector = 0):
-
-    '''INTRO
+    #Find bright points above the threshold and their times
+    bright_points = flux[flux > flux_threshold]
+    time_candidates = time[flux > flux_threshold]
+            
+    #sort them in descending order with highest fluxes first
     
-    Welcome, this is the TESS Overlapping Flare Finder and Energy Evaluator
-    (TOFFEE) flare finder
+    #we call three separate numpy functions to sort the times
+    #we want it so that we preserve the times corresponding to each flare canditate
+    #once the flares are sorted. searchsorted tells us the indices of the sorted array of
+    #flare candidates and thus the corresponding indices of the times. We then need to reverse
+    #to be in descending order from brightest to dimmest
 
-    This code works by taking a raw lightcurve, detrending it, then searching for
-    primary flares and secondary flares within the primary flares. It's been trained
-    for 120 second data and so it's advised to use the same data when running the program.
+    time_candidates = np.flip(time_candidates[np.argsort(bright_points)])
+    bright_points = np.flip(np.sort(bright_points))
 
-    We call this a "top-down" approach as instead of scanning a lightcurve
-    from left to right, looking at every single photometric point, we only look
-    at all the points above a given flux threshold. 
-    
-    For those points we start at the brightest points, starting from the peaks and modeling
-    around it to find the beginning and the end of the flare using a series of conditions
-    if there are sufficient enough points above the threshold it's counted as a flare and added
-    to the catalog. We call these flares primaries as they're found first
+    return time_candidates, bright_points
 
-    If the flare has a good number of points in the rise to the left of the peak and in the decay
-    to the right of the peak it's worthwhile to search for a secondary. To the rise we can fit a variety
-    of models such as a quadratic or gaussian (although we find gaussian to work much better for 120 second
-    TESS data). It fits a double exponential to the decay (no other model worked well at all). In the residuals,
-    defined as the difference of the flux points and the value of the flux from the fitted model, we try to find major
-    deviations from the expected behaviors. If we see three or more points above a threshold, boom, another flare
-    has been found within the first one. We call this the secondary flare becuase it was found second.
+
+#Function to find the start and end times of a bright epoch to later test if it's a flare
+def start_end_time(time, flux, time_candidate, flux_std,
+                           prim_marginal_threshold, num_below_threshold):
+
+    '''Arguments
+    For this version of the start_end finder we'll be looking at how many consecutive points reside well below the threshold
     
-    Note we call it a secondary regardless of whether or not it occurs before or after the primary. It's just named based
-    on the order we found the flares and the secondary flares always have a lower
-    peak flux (not necessarily amplitude) than the primary.
-    
-    All the other bright points above the threshold that were found to belong
-    to this flare are thrown out and the code moves onto the next peak and starts again.
+    time: 1D array of ALL the time coordinates in the flattened light curve
+    flux: 1D array of ALL the flux coordinates in the flattened light curve
+    time_candidate: time coordinate of the peak of the bright epoch
+    flare_candidate: flux coordinate of the peak of the bright epoch, potential flare peak vale
+    flux_std: Global spread of detrended flux values
+    prim_marginal_threshold: The sigma threshold considered for a point to be dim enough to longer be associated with a flare.
+                             Default value of 2 means that we're looking for flux values below 2σ to end the flare
+    num_below_threshold: the number of consecutive points below prim_marginal_threshold telling us that a flare has for sure
+                         begun or ended. Default value of three tells us that three consecutive points below the threshold before
+                         the first point in the flare or after the last point in the flare.
+
+    Returns:
+        index_start: Index of time/flux/flux_error of bright epoch
+        index_end: Index of time/flux/flux_error of the bright epoch
 
     '''
 
+    #Since in the flare_finder code we'll be sorting the flare candidates from brightest to dimmest, the flare_candidate
+    #that is passed as an argument should be a peak of a flare with the rise and decay to either side (if it is indeed a flare)
 
-    '''ARGUMENTS
+    #Alright, let's filter through these arrays and get rid of the redundant measurements
+    #We'll run through it until a certain break condition
+    time_peak_flare_index = np.where(time == time_candidate)[0][0] #identify the index of the flare peak
 
-    These arguments should be 1D array-like objects of equal size
+    #for later clarity
+    flare_peak_time = time_candidate
 
+    #find median flux, spread, and threshold for primary flare detection
+    median_flux = np.nanmedian(flux)
+    # calculate threshold from the photometric error of the photometry point
+    one_sigma_percentile = 84
+    flux_std = np.nanpercentile(flux - 1, one_sigma_percentile)
+    
+    #look around this time to see if any of the time candidates belong to the same flare
+    #look to the left to find where the beginning is
+
+    #Define function to count the number of consecutive preceeding flux values
+    #That are below a given flux threshold. Used for determining the beginning/end of flares
+    def count_left(time, flux, j, time_peak_flare_index, flux_std, prim_marginal_threshold):
+
+        '''Arguments
+        time: 1D array of ALL the time coordinates in the flattened light curve
+        flux: 1D array of ALL the flux coordinates in the flattened light curve
+        j: A index value telling us how displaced we are from the peak of the flare. Potentially the index for
+            the beginning/end of the flare
+        time_peak_flare_index: Index in time (and flux) of the peak of the flare
+        flux_std: Global spread of detrended flux values
+        prim_marginal_threshold: The sigma threshold considered for a point to be dim enough to longer be associated with a flare.
+                                 Default value of 2 means that we're looking for flux values below 2σ to end the flare
+
+        Returns:
+        count: the number of consecutive points preceding flux[time_peak_flare_index - j] that are below the threshold
+
+        '''
+        #initialize count
+        count = 0
+        #initialize end condition for the loop telling us the next point
+        terminate = False
+
+        while terminate == False:
+        
+            #if we're at the first index, end the program and just return the current count
+            if time_peak_flare_index - j - count <= 0:
+                return count
+            
+            #look left to see if the next value is below the threshold 
+            if flux[time_peak_flare_index - j - count] <= 1 + (prim_marginal_threshold * flux_std):
+                count += 1
+
+            else:
+                terminate = True
+                return count
+                
+
+    #initialize count
+    count = 0
+    j = -1 #intialize index
+    
+    while count <= num_below_threshold:
+        j += 1
+        count = count_left(time, flux, j, time_peak_flare_index, flux_std, prim_marginal_threshold)
+        if time_peak_flare_index - j - count <= 0: #condition to break if we're at the end of the lightcurve
+            break
+
+    #Hopefullt with the count loop completed, j now tells us the displaced index from the peak
+    #To the beginning of the flare
+
+    index_start = time_peak_flare_index - j
+
+
+    ####Find flare End Time
+
+    #Define function to count the number of consecutive following flux values
+    #That are below a given flux threshold. Used for determining the end of flares
+    #literally the same as count_left but with the signs flipped
+    def count_right(time, flux, j, time_peak_flare_index, flux_std, prim_marginal_threshold):
+
+        '''Arguments
+        time: 1D array of ALL the time coordinates in the flattened light curve
+        flux: 1D array of ALL the flux coordinates in the flattened light curve
+        j: A index value telling us how displaced we are from the peak of the flare. Potentially the index for
+            the beginning/end of the flare
+        time_peak_flare_index: Index in time (and flux) of the peak of the flare
+        flux_std: Global spread of detrended flux values
+        prim_marginal_threshold: The sigma threshold considered for a point to be dim enough to longer be associated with a flare.
+                                 Default value of 2 means that we're looking for flux values below 2σ to end the flare
+
+        '''
+        #initialize count
+        count = 0
+        #initialize end condition for the loop telling us the next point
+        terminate = False
+
+        while terminate == False:
+        
+            #if we're at the last index, end the program and just return the current count
+            if time_peak_flare_index + j + count >= len(time) - 1:
+                terminate = True
+                return count
+            
+            #look left to see if the next value is below the threshold 
+            if flux[time_peak_flare_index + j + count] <= 1 + (prim_marginal_threshold * flux_std):
+                count += 1
+
+            else:
+                terminate = True
+                return count
+
+    #initialize count
+    count = 0
+    j = -1 #intialize index
+    
+    while count <= num_below_threshold:
+        j += 1
+        count = count_right(time, flux, j, time_peak_flare_index, flux_std, prim_marginal_threshold)
+        if time_peak_flare_index + j + count >= len(time) - 1: #condition to break if we're at the end of the lightcurve
+            break
+
+    #Hopefullt with the count loop completed, j now tells us the displaced index from the peak
+    #To the beginning of the flare
+
+    index_end = time_peak_flare_index + j
+
+    return index_start, index_end
+
+#for a bright epoch find the number of consecutive points
+
+def consec_finder(time, flux, time_candidate, flux_std, threshold_std,
+                           prim_marginal_threshold, num_below_threshold):
+
+    '''Arguments
+        time: 1D array of ALL the time coordinates in the flattened light curve
+        flux: 1D array of ALL the flux coordinates in the flattened light curve
+        time_candidate: Index in time (and flux) of the peak of the flare
+        flux_std: Global spread of detrended flux values
+        threshold_std: Desired sigma of the lightcurve to find a flare
+        prim_marginal_threshold: The sigma threshold considered for a point to be dim enough to longer be associated with a flare.
+                                 Default value of 2 means that we're looking for flux values below 2σ to end the flare
+        num_below_threshold: the number of consecutive points below prim_marginal_threshold telling us that a flare has for sure
+                         begun or ended. Default value of three tells us that three consecutive points below the threshold before
+                         the first point in the flare or after the last point in the flare.
+
+        '''
+
+    #find start and end time
+    index_start, index_end = start_end_time(time, flux, time_candidate, flux_std,
+                           prim_marginal_threshold, num_below_threshold)
+
+    #find indices between start and end that are above threshold
+    threshold_flux = 1 + flux_std * threshold_std
+    bright_points = np.where(flux[index_start:index_end+1] >= threshold_flux)[0]
+    #Example:
+    #[100,102,103,104]
+
+    #split up the bright_points list into portions that are consecutive by cutting
+    #them into pieces where adjacent index values do not have a difference of one
+    consec_portions = np.split(bright_points,
+                               np.where(np.diff(bright_points) != 1)[0] + 1)
+    #Ex: [[100],[102,103,104]]
+    #find the lengths of each split array
+    lengths = []
+    for arr in consec_portions:
+       lengths.append(len(arr))
+
+    #Return the max value of lengths, the largest number of
+    #consecutive points in the bright epoch
+    num_consec_points = max(lengths)
+    return num_consec_points
+
+
+def declare_flare(time, flux, time_candidate, flux_std, threshold_std, num_consec,
+                           prim_marginal_threshold, num_below_threshold):
+    '''Arguments
+        time: 1D array of ALL the time coordinates in the flattened light curve
+        flux: 1D array of ALL the flux coordinates in the flattened light curve
+        time_candidate: Index in time (and flux) of the peak of the flare
+        flux_std: Global spread of detrended flux values
+        threshold_std: Desired sigma of the lightcurve to find a flare
+        num_required: Number of required consecutive points to be considered a flare. Equal to the value
+                      described in equation 3d from Chang 2015
+        prim_marginal_threshold: The sigma threshold considered for a point to be dim enough to longer be associated with a flare.
+                                 Default value of 2 means that we're looking for flux values below 2σ to end the flare
+    '''
+    time_peak_flare_index = np.where(time == time_candidate)[0][0] #identify the index of the flare peak
+    num_consec_points = consec_finder(time, flux, time_candidate, flux_std, threshold_std,
+                           prim_marginal_threshold, num_below_threshold)
+
+    #If this value is greater than the required then we have a flare!!
+    if num_consec_points >= num_consec:
+        flare = True
+        #calculate flare characteristics
+        flare_peak = time_candidate
+        #find start and end
+        index_start, index_end = start_end_time(time, flux, time_candidate, flux_std, prim_marginal_threshold, num_below_threshold)
+        flare_start = time[index_start]
+        flare_end = time[index_end]
+        flare_amp = flux[time_peak_flare_index] - 1
+        flare_ED = np.trapz(flux[index_start:index_end+1] - 1, x = time[index_start:index_end+1])
+        #covert to seconds
+        days_to_seconds = 86400
+        flare_ED = flare_ED * 86400
+        flare_type = 'primary'
+        num_points = index_end - index_start
+        num_abv_threshold = len(np.where(flux[index_start:index_end+1] > (1 + threshold_std * flux_std))[0])
+        flare_amp_sigma = flare_amp/flux_std
+        return (flare_peak, flare_start, flare_end, flare_amp, flare_ED, flare_type,
+                num_points, num_abv_threshold, flare_amp_sigma)
+        
+
+    else:
+        flare = False
+        return flare
+
+
+#Function for fitting any general function to lightcurve data
+def model_fit(func, time, flux, flux_err, p0, loss = 'huber'):
+    '''
+    Inputs:
+    func: function being fit to the data. Should be defined elsewhere in the code
+    time: time coordinates from the lightcurve of the flare
+    flux: flux values from the lightcurve from the flare
+    flux_err: error values of the flux measurements from the flare.
+              We're leaving it defaulted to None in case people just want to fit the data
+              under the (mostly good) assumption that the error is uniform
+    p0: initial guesses of the parameters for the function
+    loss: loss function used to fit the function
+
+    Returns:
+    params_opt: 1D array of the optimal parameters for the fit listed in the order as
+                they're defined in the original func
+    perr: error on the parameter estimates, again listed in the order as they're defined in the original func
+    '''
+
+    #We have the function for the model, but we need to calculate
+    #The residuals that will be minimized in the least squares
+    #Specifically: it minimizes sum(res**2)
+    def func_residuals(params, time, flux, flux_err):
+        model_flux = func(time, *params)
+        if flux_err is not None:
+            residuals = (model_flux - flux)**2/flux_err
+        else:
+            residuals = (model_flux - flux)**2
+        return residuals
+
+    #Now with residuals we can run least squares
+    least_squares_fit = scipy.optimize.least_squares(func_residuals, p0, args=(time, flux, flux_err), loss = loss)
+
+    #Pull out best fit parameters
+    params_opt = least_squares_fit.x
+
+    #calculate their errors from the Jacobian
+    from scipy.linalg import svd
+    _, s, VT = svd(least_squares_fit.jac, full_matrices=False)
+    threshold = np.finfo(float).eps * max(least_squares_fit.jac.shape) * s[0]
+    s = s[s > threshold]
+    vt = VT[:len(s)]
+    pcov = np.dot(vt.T / s**2, vt)
+    perr = np.sqrt(np.diag(pcov))
+    return params_opt, perr
+
+
+#find the residuals between the best fit function and the flux points
+def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber'):
+    #run best fit
+    params_opt = model_fit(func, time, flux, flux_err, p0, loss = loss)[0]
+    #find model fluxes
+    model_fluxes = func(time, *params_opt)
+    #find residuals
+    residuals = flux - model_fluxes
+    return residuals
+
+def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber'):
+    #define function
+    def guassian_rise(x, alpha, sigma, c):
+        return alpha * np.exp(-(x - flare_peak_time)**2 / (2 * (sigma)**2)) + c
+
+    #set initial guesses for guassian rise
+    alpha_i = flux[-1]
+    sigma_i = (time[-1] - time[0])/2
+    c_i = 1
+    p0 = [alpha_i, sigma_i, c_i]
+
+    #set weight to have to go through peak point and first point
+    sigma = flux_err
+    #sigma[-1] = 0.001
+    #fit
+    residuals = flare_residuals(guassian_rise, time, flux, sigma, p0, loss = loss)
+    return residuals
+
+# First, create one for double exponential decay
+
+def fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time, loss = 'huber'):
+    #define double exponential decay function for fitting
+    def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+        return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
+            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
+
+    #initial parameter guess
+    #alphas should add up to flare flux
+    alpha_0_i = 0.67 * flux[0]
+    alpha_1_i = 0.33 * flux[0]
+    
+    #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
+    beta_0_i = 500
+    beta_1_i = 100
+    C_i = 1
+    #intial guess array
+    p0 = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+
+    #fit to return residuals between measured flux and best fit model
+    residuals = flare_residuals(dbl_exp_decay, time, flux, flux_err, p0, loss = loss)
+    #done
+    return residuals
+
+# Create routine for fitting without peak
+
+def fit_wo_peak(time, flux, flux_err, flare_peak_time, loss = 'huber'):
+    #begins very similar to normal double exponential decay
+    #define double exponential decay function for fitting
+    def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+        return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
+            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
+
+    #initial parameter guess
+    #alphas should add up to flare flux
+    alpha_0_i = 0.67 * flux[0]
+    alpha_1_i = 0.33 * flux[0]
+    
+    #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
+    beta_0_i = 500
+    beta_1_i = 100
+    C_i = 1
+    #intial guess array
+    p0 = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+
+    #now, cut off the first two cadences
+    flare_times = time[flare_peak_index+2:index_end+1]
+    flare_flux = flux[flare_peak_index+2:index_end+1]
+    flare_flux_err = flux_err[flare_peak_index+2:index_end+1]
+
+    #now fit
+    #fit to return residuals between measured flux and best fit model
+    residuals = flare_residuals(dbl_exp_decay, flare_times, flare_flux, flare_flux_err, p0, loss = loss)
+
+    #now, notice the length residual array is short of the actual fluxes in the decay by two
+    #we have no residuals for the first two cadences, we cut them out
+    #insert nan values for first two residuals to match residuals with actual times and fluxes
+    residuals = np.insert(residuals, [0, 0], np.nan)
+    #done
+    return residuals
+
+#create routine for fitting with product gompertz
+
+def fit_w_gompertz(time, flux, flux_err, flare_peak_time, loss = 'huber'):
+    #define the function
+    def product_gompertz(x, A, alpha_0, beta_0, alpha_1, beta_1, C):
+    #alpha_0, beta_0, alpha_1, beta_1, C = theta
+        return (A * np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
+                       + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
+
+    #alphas should add up to flare flux
+    A_i = 10
+    B_i = 10
+    alpha_0_i = 0.67 * flare_peak_flux
+    alpha_1_i = 0.33 * flare_peak_flux
+    
+    #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
+    beta_0_i = 500
+    beta_1_i = 100
+    C_i = 1
+    
+    p0_prd_gomp = [A_i, alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+
+    #now fit
+    residuals = flare_residuals(product_gompertz, time, flux, flux_err, p0, loss = loss)
+    #done
+    return residuals
+    
+
+#Look through the residuals
+def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, dt,
+                     fit_multiple_secs = False):
+    '''Inputs
+    resdiuals: 1D array-like holding the residuals between the measured fluxes and the best fit models
+    flux_std: Value for the flux spread
+    secondary_threshold: sigma threshold for detecting secondary flare event in the residuals
+    num_consec_sec: the number of consecutive points required in the residuals above the threshold for a detection
+    dt = difference in time coordinates, set by the cadence
+    '''
+
+    #Find points above the threshold
+    bright_res = np.where(residuals > secondary_threshold * flux_std)[0]
+
+    #Split this array into the individual bright epochs of consecutive points
+    res_splits = np.split(bright_res, np.where(np.diff(bright_res) != 1)[0] + 1)
+
+    #initialize secondary detection
+    secondary = False
+    #Iterate through splits to see if they're flares
+    flare_peaks = []
+    flare_starts = []
+    flare_ends = []
+    flare_amps = []
+    flare_EDs = []
+    flare_types = []
+    num_points = []
+    num_abv_threshold = []
+    amp_sigmas = []
+    for epoch in res_splits:
+        if len(epoch) >= num_consec_sec: #if it's long enough we have a flare!
+            #The exact start, end, peak time need to be found later with the known peak time
+            #And whether this flare has been found to the left or right of the peak
+            #these starts and ends are indices in the residuals and are thus relative to the peak index
+            flare_peaks.append(np.argmax(epoch))
+            flare_starts.append(min(epoch))
+            flare_ends.append(max(epoch))
+            #But we can find the non-time related quantities easily!
+            flare_amps.append(max(residuals[epoch]))
+            flare_EDs.append(np.trapz(residuals[epoch], x = np.arange(0, len(epoch) * dt, dt)))
+            if secondary == True: #if we've previously found a secondary this must be a higher order flare
+                flare_types.append('tertiary')
+            else:
+                flare_types.append('secondary')
+            num_points.append(len(epoch))
+            num_abv_threshold.append(len(epoch))
+            amp_sigmas.append(max(residuals[epoch])/flux_std)
+            secondary = True
+
+    #If we don't want to include multuple secondaries then let's only keep the LARGEST found flare
+    #by amplitude
+    if fit_multiple_secs == False:
+        if secondary == True:
+            #Find which flare had the largest amplitude
+            biggest_sec = np.argmax(flare_amps)
+            #Only keep the flare signature from this flare
+            flare_peaks = flare_peaks[biggest_sec]
+            flare_starts = flare_starts[biggest_sec]
+            flare_ends = flare_ends[biggest_sec]
+            flare_amps = flare_amps[biggest_sec]
+            flare_EDs = flare_EDs[biggest_sec]
+            flare_types = 'secondary'
+            num_points = num_points[biggest_sec]
+            num_abv_threshold = num_abv_threshold[biggest_sec]
+            amp_sigmas = amp_sigmas[biggest_sec]
+            
+    #if there was a flare return it's attributes
+    if secondary == True:
+        return flare_peaks, flare_starts, flare_ends, flare_amps, flare_EDs, flare_types, num_points, num_abv_threshold, amp_sigmas
+
+    #If no flare was found then return a false reading
+    else:
+        return False
+        
+
+def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 2.0,
+                  num_consec = 3, num_consec_sec = 3, loss = 'huber',
+                  fit_multiple_secs = True,
+                  rise_func = 'gaussian', decay_func = 'double exponential',
+                  prim_marginal_threshold = 3.0, num_below_threshold = 3,
+                  min_break = 0.25, clip_breaks = 200, flag_values = [0]):
+    # Yes, it's a lot of inputs, but most of them are defaulted to pretty good values. I'd recommend only toying
+    #With primary_threshold, secondary_threshold, num_consec, & num_consec_sec. 
+    #You can also change flag values to [0,512] which isn't a bad idea
+
+    '''All in one function to take detrended lightcurve and return the detected flares
+
+    LIGHTCURVE INPUTS:
     time: the time coordinates of the lightcurve in BJD. The detrending utilizes the orbit timing so these should be
           in the default units from lightkurve.
-
-    flux: Photometric flux. Can either be in raw units of e/sec becuase we'll normalized later or can be normalized already.
-
-    flux_err: Photometric error on the cadences.
-              Can either be in raw units of e/sec becuase we'll normalize later or can be normalized already.
-
+    flux: 1D array of Photometric flux. Ideally, detrended. The code will RUN on raw data but it won't work well.
+    flux_err: 1D array of Photometric error on the cadences. Make sure to have these be normalized if you've detrended!
     quality: quality flag of the cadence from TESS. We utilize filtering to remove poor quality readings from the
              lightcurves to ensure more accurate detection. If you want to skip this step then you can just make
              an array of equal length to the time, flux, and flux_err arrays and fill it with the value 0.
+             
+    DETECTION:
+    primary_threshold: Integer or float value greater than 0. Sets the threshold for detection of primary flares
+                       in terms of sigma of the global spread of photometry points. Default value is set to 3σ,
+                       which is the common value for threshold-based detection.
+    secondary_threshold: Integer or float value greater than 0. Sets the sigma threshold for detection of secondary flares
+                         within the residuals between the primary and best-fit model. Default value is set to 2σ.
+    num_consec: Number of consecutive points required to be above the primary detection threshold to be called a primary flare.
+                Same as N_3 from equation 3d) from Chang et al 2015
+    num_consec: Number of consecutive points required to be above the secondary detection threshold to be called
+                a secondary flare. Same as num_consec but specifically for finding secondaries in the residuals
 
-    LIGHTCURVE PREPARATION
+    FLARE MODELING:
+    rise_func: function to model the rise portion of a flare.
+               Default value corresponds to default use of gaussian rise.
+    decay_func: function to model the decay portion of a flare.
+               Default value corresponds to default use of double exponential decay on full decay.
+               Other elligible values are "without peak" and "gompertz"
 
+    SETTING BEGINNING AND END TIMES OF FLARES:
+    prim_marginal_threshold: Sets the threshold to consider the start and end of a flare. A default value of 3 corresponds
+                             to points needing to be 3σ or larger from the median to be considered a part of a flare. A value
+                             of 2.0 or 2.5 aren't bad ideas.
+    num_below_threshold: Sets how many points need to be below prim_marginal_threshold in order for a bright
+                         epoch to be considered returned to quiescent level. A default value of 3 means there must be
+                         3 consecutive points below prim_marginal_threshold to mark the beginning and end of a flare.
+                         Many people adopt the value of 2.
+             
+    LIGHTCURVE PREP:
+    min_break: float value represening the smallest duration of a break in the lightcurve (in days) for which TOFFEE will
+               mask out points on either side. Default is set to 0.25, the same value as the default window length for Wotan.
+               In Pratt et al 2025 we used a value of 0.025 days to be super conservative.
+    clip_breaks: The number of cadences to clip out on either side of a break detected by min_break. Default is 100 cadences
+                 which corresponds to 200 minutes of data in 120 sec cadence data from TESS.
     flag_values: A list of the acceptable flag values you want to include in the analysis. By default we only
                  permit cadences with a perfect quality of zero into the analysis. However it has been shown that
                  points with a flag value of 512 can correspond to the peaks of flares and so can be kept in. For that
                  you can pass flag_values = [0, 512] to include them. The other will be masked out.
-
-    detrend: boolean value representing whether or not to detrend the lightcurve. 
-    
-             If True TOFFEE will detrend using biwieght detrending. If not, TOFFEE will skip this
-             and go straight to detection. TOFFEE relies on detrending to find flare signals however
-             if the lightcurve has been detrended beforehand using a preferred method you
-             may want to skip detrending again which may eat into the flare signal.
-
-    window_length: float value representing the window length of wotan detrending (Hippke et al. (2019, AJ, 158, 143)).
-
-    periodogram: None value or list of length 2 in the form [min_period, max_period]. Periodogram iteratively runs LS test
-                 on lightcurve post Wotan detrend to find residual periodic red noise and flatten it using sine fit.
-                 The periods of such fits are in the range (min_period, max_period) such that min_period is the smallest period
-                 in days considered for the fit and max_period is the maximum period tested. In our analysis we find [0.01, 10] to 
-                 work effectively, needing to capture the rapid rotators that majorly affect fitting.
-
-    TOFFEE also clips all breaks in the lightcurve to avoid edge effects of detrending creating false positve signals.
-
-    min_break: float value represening the smallest duration of a break in the lightcurve (in days) for which TOFFEE will
-               mask out points on either side. Default is set to 0.25, the same value as the default window length for Wotan.
-               In Pratt et al 2025 we used a value of 0.025 days to be super conservative.
-
-    clip_breaks: The number of cadences to clip out on either side of a break detected by min_break. Default is 100 cadences
-                 which corresponds to 200 minutes of data in 120 sec cadence data from TESS.
-
-    
-
-    PRIMARY FLARE DETECTION ARGUMENTS
-
-    magic_flare_std: Integer or float value greater than 0. Sets the threshold for detection of primary flares in terms of sigma of the global
-                     spread of photometry points. Default value is set to 3σ which is the common value for threshold-based detection.
-
-    consecutive: boolean value representing how a primary flare will be determined. 
-    
-                 If true a flare will be counted only if three consecutive points are above the threshold.
-                 This is consistent with many other threshold-based methods. It's easy to follow and generally
-                 works well. However, for some detrendended lightcurves certain artifacts of the detrending
-                 may pop up as false-positive signals.
-                 
-                 If false a flare will be counted even if not every point is above the threshold.
-
-                 The non-consecutive case which we call the 'three in four rule' works to both include low amp
-                 flares that don't have three consecutive points above the threshold and rule out signals that
-                 result from detrending artifacts. It works by starting from the peak of the flare and looking
-                 to the left to find the start of the flare. A flare is considered to have begun when the next
-                 three points to the left of some cadence all lie well under the threshold (1σ less than the threshold).
-                 Then the code looks to the right, saying a flare has ended when the next three points to the right of some cadence
-                 are all well below the threshold (1σ less than the threshold). In this way we try to say with confidence that
-                 a flare event has truly begun and ended and can include points below the threshold.
-
-                 Then TOFFEE reads where the first point associated with the flare was above the threshold and where
-                 the last point associated with the flare was above the threshold. If 75% of the points between them are
-                 above the flux threshold then we call it a flare as we see a true signal. So if there's a small signal where
-                 there are three cadences above the threshold separated by one cadence below the threshold it's still a flare.
-                 In practice this one cadence below the threshold is only just below the threshold of detection so visually
-                 it still passes as a flare.
-
-                 While catching low amp flares it also catches incomplete detrending where there is residual modulation.
-                 Leftover red noise can occasianally rise above the flux threshold being falsly flagged as a flare. This condition
-                 helps to eliminate such false-positives because they tend to fluctuate around the threshold for a while, causing
-                 the fraction of points above the threshold as opposed to below the threshold to be lower than 75%.
-
-                 The only catch is the case where a flare occurs during this positive modulation. In that case it's quite tricky
-                 to recover them. To save quality signals we still recover the flares if the amplitude is sufficiently high.
-                 Sufficiently high is defined as being 1.5x the original flux threshold for detection. This typically finds obvious
-                 flares while keeping away false-positive detection when using the typical threshold value of 3σ.
-
-    prim_marg_rate: float value from 0.0 to 1.0 representing the threshold value for a cadence to be
-                    consideres a part of a flare. Rather than being the sigma threshold itslef it's a
-                    fraction of the primary flare sigma. For example, with the default primary flare threshold
-                    of 3σ and the default prim_marg_rate of 0.67 cadences flux points with values of 2σ can be
-                    considered a part of the flare. You want something low enough that you can catch the epochs of the
-                    lightcurve above the threshold that may be separated by one or two other cadences but no too low that
-                    an unreasonable number of points are included in the flare and the start and end times are poor.
-
-    rate_above_threshold: float value between 0.0 and 1.0. If using the nonconsecutve detection for primary flares
-                          (consecutive = False) rate_above_threshold determines the minimum fraction of points above
-                          the flux threshold compared to the total number of points in the flare to be called a flare.
-                          The default is 0.75 where the 'three in four rule' gets its name but can be altered depending on
-                          the purpose of the user. Higher values will result in stricter requirements (0.9 requires 90% of the
-                          flux points to be above the threshold) and lower values loosen requirements. We find 0.75 to be the
-                          minimum while comfortably getting quality flares as opposed to 0.6 (or a 'three in five rule').
-
-    SECONDARY FLARE DETECTION ARGUMENTS
-
-    sec_flare_std: Integer or float value greater than 0. Sets the threshold for detection of primary flares in terms of sigma of the global
-                   spread of photometry points. Default value is set to 2σ.
-
-    rise_func: str variable of value 'gaussian' or 'quad' determining the model used to fit the rise. If 'gaussian' is applied
-               then the rise will be modeled by a guassian rise function. If 'quad' is applied then a quadratic rise will be used.
-               'gaussian' is recommended for 120 sec data
-
-    sec_marg_rate:  float value from 0.0 to 1.0 representing the threshold value for a cadence to be
-                    consideres a part of a fsecondary lare. Rather than being the sigma threshold itslef it's a
-                    fraction of the secondary flare sigma. For example, with the default primary flare threshold
-                    of 2σ and the default prim_marg_rate of 0.75 cadences flux points with values of 1.5σ can be
-                    considered a part of the secondary flare. It's used to determine whether or not a secondary flare
-                    was missed because of it's affect on the fit. A default value of sec_marg_rate = 0.75 with
-                    sec_flare_std = 2.0 means that if there are three points 1.5σ above the fitted model then
-                    there is a possible secondary and it's worth refitting without those points.
-
-    fit_twice: boolean value representing whether or not to attempt refitting of the decay in the case where a potential
-               secondary flare was missed because of it's affect in lifting up the fit. A marginal flare is defined as an
-               event in the residual where three consecutive points are at least 75% of the desired threshold.
-
-    fit_multiple_secs: boolean value representing whether or not to search for more than one secondary flare event in the residual
-                       of the decay of a flare, finding possible teritiary and even quartic flares. We initially leave this off
-                       as it often picks up Quasi-Periodic Pulsations as these tertiary flares but it could be useful if that's
-                       your goal.
-
-
-    PLOTTING FLARE FITS ARGUMENTS
-    TOFFEE also has built in plotting for the fittings of flares and finding secondary flares. If you don't want to see them
-    you can leave visualize_fit in the default state of False. If you do then set visualize_fit = True but you don't need to mess with most of
-    the arguments unless you really want a different color pallette or the TIC and Sector plotted as well.
-
-    visualize_fit: boolean value representing whether or not to plot each attempted fit for primary flares along with residuals
-                   and overplotting of primary and secondary flares. Does not show ALL flares, only ones where a fit was attempted.
-                   If true fits and residuals will be plotted, if false this step will be skipped.
-
-    IF visualize_fit = True, these variables will be passed
-
-    primary_color = string variable for the color of the points associated with a primary flare event.
-
-    secondary_color = string variable for the color of the points associated with a secondary flare event.
-
-    tertiary_color = string variable for the color of the points associated with a tertiary flare event.
-
-    cadence_color = string variable for the color of the TESS photometry points not associated with flares.
-
-    threshold_color = string variable for the color of the horizontal line representing the flux threshold for primary flare detection.
-
-    fit_color = string variable for the color of the parameterized curves for the rise and decay of the flares.
-
-    fontsize = integer variable for the fontsize of the axes labels and titles of the plots from visualize_fit
-
-    labelsize = integer variable for the fontsize of the labels on the axes
-
-    TIC_number = integer variable for the TIC Number of the star from which the lightcurve comes from. Useful when plotting
-                 the flare fits from many stars.
-
-    TESS_sector = integer variable for the TESS Sector Number from which the lightcurve comes from. Useful when plotting the flare fits
-                  for multiple sectors of a star.
-
-    
-
     '''
 
+    #################LIGHTCURVE PREP#################
 
-
-    '''RETURNS
-
-    The returns of the code are a suite of physical and data based measurements:
-
-    flare_peak_times, flare_start_times, flare_end_times, flare_amps, flare_equivalent_durations,
-    primary_or_secondary, points_in_flare, points_abv_threshold, amp_sigma
-
-
-    flare_peak_times: Times (in BTJD), of the peaks of the flares, the moments of brightest emission
-
-    
-    flare_start_times: Time marking the beginning of the flares before the sudden rise
-
-    
-    flare_end_times: Time marking the end of the flares after the decay
-
-    
-    NOTE: The flare start and end times are a bit finnicky based on how you define it in the
-          code. We advise using the peak times as a better characterization of when the flare occurs.
-
-    
-    flare_amps: the flux of the peak emission normalized to the median emission for the star. This is with
-                the background emission of the star subtracted out so it's just the emission of the flare
-
-    
-    flare_equivalent_durations: Used for finding the energies. Defined as the equivalent amount of time (in seconds)
-                                that the star would need to shine in order to emit the same amount of energy as the flare.
-                                Found by integrating the flux of the flare with respect to time using the trapezoidal rule
-                                after subtracting the background emission of the star. Multiplying the ED by the luminosity
-                                of the star finds the energy of the flare.
-
-    
-    primary_or_secondary: Label telling how this flare was found. Comes in four flavors.
-    
-                          "primary": Means this is a flare that was found where the peak was identified,
-                                     it was modeled, and passed the checks. There may or may not have been
-                                     a fit applied to the rise and decay. There may or may nor have been a
-                                     secondary found to this flare.
-                          
-                          "primary_dbl_fit_failed": A special type of primary flare in which a double exponential
-                                                    was fit to the decay with no secondary found. However it seemed
-                                                    like there was possibly another flare that was just missed so it
-                                                    tried to refit the decay and still didn't find a secondary. We keep
-                                                    track of these to see the relative success of these attempted refittings
-                                                    to find more secodnary flares.
-
-                         "secondary": Means this flare was found within a primary flare. It may be in the rise or the decay.
-                                      It was found on the first attempt of fitting a model to the rise and decay with no need
-                                      for a refit
-
-                         "secondary_second_try": A special type of secondary that was found in the decay of a flare only
-                                                 after refitting the model without brighter points that affected the first
-                                                 fit
-
-
-    points_in_flare: Number of flux points identified with the flare.
-
-    
-    points_abv_threshold: Not all points associated with the primary flare are necessarily above the threshold, the conditions
-                          are complicated depending on what setting you use to identify the beginning and end. So we
-                          also keep track of the number of points in the flare above the detection threshold.
-
-
-    amp_sigma: The amplitude of the flare divided by the spread of the photometric points. Tells us how much the peak of the
-               flare rises relative to the noise of the lightcurve.
-
-    
-    '''
-
-    '''FUTURE WORK
-    
-    TOFFEE is always looking for improvement in performance and flexibility. There are a few outstanding challenges for the
-    project in terms of secondary detection. 
-    
-    1) Seeking tertiary and other high order flares. The issue comes
-    from the effect of Quasi-Periodic Pulsations that get flagged as loads of secondary flares. While this is perhaps a
-    cool way to find such events in a large sample it's not good when you want quality sources. One solution is to test
-    for periodicity in the events (whether or not the primary and secondary are equally spaced in time to the secondary and
-    tertiary). 
-    
-    2) The conditions for secondary detection are still a little rigid. It has been shown limiting detection
-    to only two cadences above 3σ is good for finding flares. Or maybe you want super obvious flares so you want 4 cadences above
-    5σ. We're adding that flexibility as well.
-
-    3) As best as we tried the detrending is not perfect. For pulsating stars in particular the fits are not great yet
-    when the program lands on a solution TOFFEE just goes ahead to detect flare signals.
-    We're adding filtering so you can only search for flares on lightcurves for which the detrending 
-    actually flattens the light curve.
-
-    '''
-    
-    #######################Unpack Array#############################
-
-    #set what flags you want to be in the analysis 
-
+    ######REMOVE THE LOW QUALITY POINTS######
     #perfect points is the quality mask only containing cadences with the desired quality flag(s)
     perfect_points = []
 
@@ -748,2347 +941,542 @@ def flare_finder(time, flux, flux_err, quality, magic_flare_std = 3.0, sec_flare
         if q in flag_values:
             #don't mask out
             perfect_points.append(True)
-    
         else:
             #mask out poor points
             perfect_points.append(False)
 
-
     #unpack good values of flux and time for the star
-
     flux = flux[perfect_points]
     time = time[perfect_points][np.isnan(flux) == False]
     flux_err = flux_err[perfect_points][np.isnan(flux) == False]
     flux = flux[np.isnan(flux) == False]
-
     
-    ###################Flatten the lightcurve###########################
-
-    ##If you passed a raw lightcurve and want it detrended go through this
-    #Patch of code, if not go stright to next section
-
-    if detrend == True:
-
-        #if you are using a periodogram and passed the range of frequencies
-        #we want to use the flattened light curve
-        #after taking out possible residual oscillations
-    
-        #if not then we'll just use wotan
-    
-        if periodogram != None:
-        
-            t, lc_quad, lc_wotan, lc_flat, periodic = flatten(time, flux, flux_err, plot_results=False,
-                                                               short_window=window_length, periodogram= periodogram)
-    
-            #done for convience
-    
-            time = t
-    
-                
-    
-            #pull out flattened flux and flux_err values
-    
-            normalized_flux, flux_err, sine_trend = lc_flat
-    
-            #redundancy step, normalize again
-    
-            normalized_flux = normalized_flux/np.median(normalized_flux)
-    
-            flux_err = flux_err/np.median(normalized_flux)
-
-            #find the 84th percentile of the detrended flux, or 1σ spread
-    
-            flux_std = np.nanpercentile(normalized_flux - 1, 84)
-    
-        else:
-    
-            t, lc_quad, lc_wotan, periodic = flatten(time, flux, flux_err, plot_results=False,
-                                                               short_window=window_length, periodogram = periodogram)
-    
-            #done for convience
-    
-            time = t
-    
-            #pull out flattened flux and flux_err values
-    
-            normalized_flux, flux_err, sine_trend = lc_wotan
-    
-            #redundancy step, normalize again
-    
-            normalized_flux = normalized_flux/np.median(normalized_flux)
-    
-            flux_err = flux_err/np.median(normalized_flux)
-    
-            #find the 84th percentile of the detrended flux, or 1σ spread
-    
-            flux_std = np.nanpercentile(normalized_flux - 1, 84)
-
-
-    #if we elected not to detrend we still need something to fill int he flattening_mask
-    #this should basically mask out none of the points
-    else:
-
-        #and the normalized fluxes and flux errors
-
-        normalized_flux = flux/np.nanmedian(flux)
-    
-        flux_err = flux_err/np.nanmedian(flux)
-
-        #find the 84th percentile of the detrended flux, or 1σ spread
-    
-        flux_std = np.nanpercentile(normalized_flux - 1, 84)
-
-
-    
-    
-    #####################Find the break and apply mask###################
-
-    #Use breakfinder to find the break(s) from TESS sector and clip off cadences
-    #from either side of the breaks
+    ######CLIP OFF THE BREAKS######
 
     #Apply a mask to cut out points on either side of the breaks
-
     if clip_breaks != None:
-
-        break_mask = light_curve_mask(time, normalized_flux, min_break = min_break, clip_breaks = clip_breaks)
-
+        break_mask = light_curve_mask(time, flux, min_break = min_break, clip_breaks = clip_breaks)
         #apply to light curve
-
-        normalized_flux = normalized_flux[break_mask]
-
+        flux = flux[break_mask]
         time = time[break_mask]
-
         flux_err = flux_err[break_mask]
-
-
-    
 
 
     #################IDENTIFY BRIGHT POINTS AS POTENTIAL FLARES##################
 
+    #Find the spread of the flux
+    one_sigma_percentile = 84
+    flux_std = np.nanpercentile(flux - 1, one_sigma_percentile)
 
-    #identify really bright fluxes and their associated times a certain number of
-    #standard deviations from the median
+    time_candidates, bright_points = find_candidates(time, flux, flux_std, primary_threshold)
 
 
-    #There ARE redundant fluxes in these measurements, we'll need to filter those out
-
-    median_flux = 1
-
-    flux_threshold = 1 + (magic_flare_std * flux_std)
-
-    flare_candidates = normalized_flux[normalized_flux > flux_threshold]
-
-    time_candidates = time[normalized_flux > flux_threshold]
-
-    #set a marginal threshold to help count the points that belong to a flare
-
-    prim_marginal_threshold = prim_marg_rate * magic_flare_std
-
-    sec_marginal_threshold = sec_marg_rate * sec_flare_std
-
-            
-
-    #sort them in descending order with highest fluxes first
-    
-    #we call three separate numpy functions to sort the times
-    #we want it so that we preserve the times corresponding to each flare canditate
-    #once the flares are sorted. searchsorted tells us the indices of the sorted array of
-    #flare candidates and thus the corresponding indices of the times. We then need to reverse
-    #to be in descending order
-
-    time_candidates = np.flip(time_candidates[np.argsort(flare_candidates)])
-
-    flare_candidates = np.flip(np.sort(flare_candidates))
-
-    #empty array to hold flare amplitudes
-
-    flare_amps = []
-
-    #empty array to hold the flare equivalent durations
-
-    flare_equivalent_durations = []
-
-    #flare times at peak flux
-
+    #################WITH THE TIMES AND FLUXES OF BRIGHT POINTS ITERATE AND DETECT FLARES#################
+    #Initialize arrays for the flare attributes
     flare_peak_times = []
-
-    #flare start times
-
     flare_start_times = []
-
-    #flare end times
-
     flare_end_times = []
-
-    #######INITIALIZE FLAGS TELLING US HOW WE FOUND THESE FLARES########
-
-    #Was this a primary or secondary detection, secondary means found in the residuals
-
+    flare_amps = []
+    flare_equivalent_durations = []
     primary_or_secondary = []
-
-
-    #How many points are associated with this flare, both above and below the threshold?
-    
     points_in_flare = []
-    
-    
-    #How many points above the threshold were there?
-
     points_abv_threshold = []
-
-    #What's the amplitude of the flare in terms of sigma?
-
     amp_sigma = []
 
     i = 0
+    while len(time_candidates) > 2: #Keep running until we exhaust all the time candidates
+        #################FIND THE START AND END TIMES#################
+        #This is done to remove redundant points even if it's not a flare event
+        #pull out peak time
+        flare_peak_time = time_candidates[i]
+        flare_peak_index = np.where(time == flare_peak_time)[0][0]
 
-    #So basically we're going to go through the list from the largest fluxes down
-    #if there are other listed candidates near the flux we're testing they're probably a part of this
-    #flare
+        #start and end times via their indices
+        index_start, index_end = start_end_time(time, flux, flare_peak_time, flux_std,
+                           prim_marginal_threshold, num_below_threshold)
+        flare_start_time = time[index_start]
+        flare_end_time = time[index_end]
+        #also useful now to pull out the flare times, fluxes, and flux_err
+        flare_times = time[index_start:index_end+1]
+        flare_fluxes = flux[index_start:index_end+1]
+        flare_flux_errs = flux_err[index_start:index_end+1]
 
-    while i < len(time_candidates):
-
-        ###########CLASSIFY FLARE ESSENTIAL PARAMETERS##############
-
-        #this guy is for SURE a flare candidate
-        flare_flux = flare_candidates[i]
-
-        #this is the associated time
-        flare_time = time_candidates[i]
-
-            
-        #Alright, let's filter through these arrays and get rid of the redundant measurements
-        #We'll run through it until a certain break condition
-    
-        time_peak_flare_index = np.where(time == flare_time)[0][0]
-
-        
-        #for later clarity
-
-        flare_peak_time = flare_time
-
-        #find median flux, spread, and threshold for primary flare detection
-
-        median_flux = 1
-
-        # calculate threshold from the photometric error of the photometry point
-        one_sigma_percentile = 84
-
-        flux_std = np.nanpercentile(normalized_flux - 1, one_sigma_percentile)
-
-        #and the flux threshold
-
-        flux_threshold = median_flux + (magic_flare_std * flux_std)
-
-        
-        
-        
-        #look around this time to see if any of the time candidates belong to the same flare
-
-        #look to the left to find where the beginning is
-
-        if time_peak_flare_index + 3 >= len(normalized_flux) - 1:
-
-            j = 0
-
-        else:
-        
-            j = 0
-    
-            #We want three consecutive points to be below the threshold to be sure the flare has finished off
-            #before this point
-    
-            while (normalized_flux[time_peak_flare_index - j - 1] > median_flux + (prim_marginal_threshold * flux_std) or
-                   normalized_flux[time_peak_flare_index - j - 2] > median_flux + (prim_marginal_threshold * flux_std) or
-                   normalized_flux[time_peak_flare_index - j - 3] > median_flux + (prim_marginal_threshold * flux_std)):
-
-                if time_peak_flare_index - j - 3 <= 0:
-    
-                    break
-    
-                j += 1
-
-
-        #once it's done we have the beginning time of flare
-
-        time_start_flare_index = time_peak_flare_index - j
-
-        flare_start_time = time[time_peak_flare_index - j]
-
-
-        if time_peak_flare_index + 3 >= len(normalized_flux) - 1:
-
-            j = 0
-
-        #Now for the end time
-
-        else:
-
-            #look to the right to find where the end is
-    
-            j = 0
-    
-            #We want two consecutive points to be below the threshold to be sure the flare has finished off
-            #after this point
-    
-            while (normalized_flux[time_peak_flare_index + j + 1] > median_flux + (prim_marginal_threshold * flux_std) or
-                   normalized_flux[time_peak_flare_index + j + 2] > median_flux + (prim_marginal_threshold * flux_std) or
-                   normalized_flux[time_peak_flare_index + j + 3] > median_flux + (prim_marginal_threshold * flux_std)):
-    
-                if time_peak_flare_index + j + 3 >= len(normalized_flux) - 1:
-    
-                    break
-    
-                j += 1
-
-
-        #once it's done we have the beginning time of flare
-
-        time_end_flare_index = time_peak_flare_index + j
-
-        flare_end_time = time[time_peak_flare_index + j]
-
-        
-
-        #find all the points above the threshold that are considered a part of this flare
+        ## All the points between the start and end are redundant and need to be tossed from the
+        #candidates
         redundant_points = np.where((time_candidates <= flare_end_time) &
-                                    (time_candidates >= flare_start_time) &
-                                    (time_candidates != flare_time))[0]
-
-
-        ##################DETERMINING WHETHER THERE'S SIGNAL########################
-
-        if consecutive == True:
-            
-            #See if we should keep the flare if there are two more points around it
-            #if there are less than two redundant points it's probably noise and we should
-            #dump it
-    
-            if len(redundant_points) >= 2:
-    
-                #We still need some consecutive points to be above threshold
-    
-                #Create boolean conditions for consecutive bright points
-    
-                #two points to the left are above threshold
-    
-                two_points_left = ((normalized_flux[time_peak_flare_index - 2] > flux_threshold) &
-                                   (normalized_flux[time_peak_flare_index - 1] > flux_threshold))
-    
-                #two surrounding points are above threshold
-    
-                two_surrounding_points = ((normalized_flux[time_peak_flare_index - 1] > flux_threshold) &
-                                   (normalized_flux[time_peak_flare_index + 1] > flux_threshold))
-            
-    
-                #two points to the right
-    
-                two_points_right = ((normalized_flux[time_peak_flare_index + 2] > median_flux + (magic_flare_std * flux_std)) &
-                                   (normalized_flux[time_peak_flare_index + 1] > median_flux + (magic_flare_std * flux_std)))
-    
-    
-                #If at least one of these conditions are met then this flare is TRUE
-                
-                if two_points_left == True or two_surrounding_points == True or two_points_right == True:
-    
-                    sufficient_points = True
-
-                    #track the total number of points we found above the threshold
-
-                    num_past_threshold = len(np.where(normalized_flux[time_start_flare_index:time_end_flare_index + 1] >
-                                              median_flux + (magic_flare_std * flux_std)))
-    
-                #If none of the conditions are met then this flare is FAKE
-    
-                else:
-    
-                    sufficient_points = False
-    
-            else:
-                        
-                sufficient_points = False
-
-
-        
-        
-        
-        elif consecutive == False:
-
-            #See if we should keep the flare if there are at least 3 points above the threshold
-    
-            if time_end_flare_index - time_start_flare_index >= 2:
-    
-                #find the number of points above the threshold
-    
-                num_past_threshold = np.where(normalized_flux[time_start_flare_index:time_end_flare_index + 1] >
-                                              median_flux + (magic_flare_std * flux_std))[0]
-
-                if len(num_past_threshold) > 0:
-
-                    #We want the bright points to cluster together, we want the bright points above the threshold
-                    #to occurr 3 every 4 points
-    
-                    bright_range = max(num_past_threshold) -  min(num_past_threshold) + 1
-                    #the plus one avoids an off by one error becuase max(num_past_threshold) -  min(num_past_threshold) is
-                    #not inclusive of the first point
-                    #e.g if indices 0,1,2 are the range above the threshold then bright_range is 2 despite the fact 3 points are 
-                    #actually included
-    
-                    #number of points above threshold in range of bright points
-    
-                    bright_ratio = len(num_past_threshold)/bright_range
-    
-                    if (len(num_past_threshold) >=3) & (bright_ratio >= rate_above_threshold):
-        
-                        sufficient_points = True
-    
-                        num_past_threshold = len(num_past_threshold)
-
-                    #so if the flare failed at this step it may be a flare
-                    #that failed because it occurred on the up of a flare
-                    #modulation so let's log that and see if it's something with the large amplitude
-    
-                    else:
-
-                        #new threshold, two times the amount we normally look for
-
-                        firm_flare_std = 1.5 * magic_flare_std
-
-                        #We need some consecutive points to be above threshold
-    
-                        #Create boolean conditions for consecutive bright points
-            
-                        #two points to the left are above threshold
-            
-                        two_points_left = ((normalized_flux[time_peak_flare_index - 2] > median_flux + (firm_flare_std * flux_std)) & 
-                                           (normalized_flux[time_peak_flare_index - 1] > median_flux + (firm_flare_std * flux_std)))
-            
-                        #two surrounding points are above threshold
-            
-                        two_surrounding_points = ((normalized_flux[time_peak_flare_index - 1] > median_flux +
-                                                   (firm_flare_std * flux_std)) &
-                                           (normalized_flux[time_peak_flare_index + 1] > median_flux + (firm_flare_std * flux_std)))
-                    
-            
-                        #two points to the right
-            
-                        two_points_right = ((normalized_flux[time_peak_flare_index + 2] > median_flux +
-                                             (firm_flare_std * flux_std)) &
-                                           (normalized_flux[time_peak_flare_index + 1] > median_flux + (firm_flare_std * flux_std)))
-            
-            
-                        #If at least one of these conditions are met then this flare is TRUE
-                        
-                        if two_points_left == True or two_surrounding_points == True or two_points_right == True:
-
-                            #so we have three points above a much stronger threshold, it's definitely a flare
-            
-                            sufficient_points = True
-
-                            num_past_threshold = len(num_past_threshold)
-
-                        else:
-                            
-                            sufficient_points = False
-
-                else:
-
-                    sufficient_points = False
-    
-            else:
-                        
-                sufficient_points = False
-
-        #If it IS a real flare
-        #delete these redundant points in the arrays
-        
-
-        if sufficient_points == True:
-
-            #############BEGIN LOOKING FOR POSSIBLE SECONDARIES############
-
-            #look left and right for another peak
-
-            #For high amplitude flares the inner complexities of the flare show up
-            #as flare-like signals so let's raise the threshold for secondaries if the amplitude is large
-
-            if flare_flux >= 3:
-
-                sec_flare_std = 10.0
-
-            else:
-
-                sec_flare_std = sec_flare_std
-
-
-            ############LEFT SEARCH###############
-
-            #If there are at least two points to the left of the peak fit a quadratic and see
-            #if it's poor. Pull out the residual as ways to find the amplitude of peak
-
-            #if the R Square really sucks then refit the line only taking the points that
-            #decrease from the peak and find the flux of the largest flux to the left
-            #we may be looking at a large connected flare to the left.
-
-
-            #Find the points to fit the line to, search to the left until at least two points regress
-            #to a little below the threshold
-
-
-            #look for something interesting inbetween the peak and the start point we found earlier
-
-            #Fit a line with all the points between the two ends if there are more than three points left
-            #of the peak
-
-            if time_peak_flare_index - time_start_flare_index >= 5:
-
-                rise_indices = np.arange(time_start_flare_index, time_peak_flare_index + 1)
-
-                rise_time = time[time_start_flare_index:time_peak_flare_index + 1]
-
-                rise_flux = normalized_flux[time_start_flare_index:time_peak_flare_index + 1]
-
-                rise_flux_err = flux_err[time_start_flare_index:time_peak_flare_index + 1]
-
-                #use curve-fit to fit a functional form to the rise of the flare to test for secondaries
-
-                #using keywork arg for which form to use
-
-                if rise_func == 'gaussian':
-
-                    def guassian_rise(x, alpha, sigma, c):
-
-                        return alpha * np.exp(-(x - flare_peak_time)**2 / (2 * sigma)**2) + c
-
-                    #set initial guesses for guassian rise
-    
-                    alpha_i = flare_flux
-    
-                    sigma = flare_peak_time - flare_start_time
-    
-                    c_i = 1
-
-                    p0 = [alpha_i, sigma, c_i]
-
-                    #set weight to have to go through peak point and first point
-
-                    sigma = rise_flux_err
-                    sigma[-1] = 0.001
-    
-    
-                    #set initial guess for guassian rise
-    
-    
-                    params, cov = scipy.optimize.curve_fit(guassian_rise, rise_time, rise_flux, sigma = sigma, 
-                                                           p0 = p0, bounds = ([0, 0, 0],
-                                                                     [np.inf, np.inf, np.inf]),
-                                                           maxfev = 10000)
-    
-    
-                    alpha, sigma, c = params
-    
-                    #find residuals
-    
-                    res = rise_flux - guassian_rise(rise_time, alpha, sigma, c)
-                
-                
-                if rise_func == 'quad':
-
-                    def quad(x, a, b, c):
-                        return a * (x - flare_peak_time)**2 + b * (x - flare_peak_time) + c
-                
-                    #set initial guesses for quad
-    
-                    a_i = 0
-    
-                    b_i = 1
-    
-                    c_i = 1
-
-                    p0 = [a_i, b_i, c_i]
-
-                    #set weight to have to go through peak point and first point
-
-                    sigma = rise_flux_err
-                    sigma[-1] = 0.001 * sigma[-1]
-    
-    
-                    #set initial guess for guassian rise
-    
-    
-                    params, cov = scipy.optimize.curve_fit(quad, rise_time, rise_flux, sigma = sigma, 
-                                                           p0 = p0, bounds = ([0, 0, median_flux - magic_flare_std * flux_std],
-                                                                     [np.inf, np.inf, median_flux + magic_flare_std * flux_std]))
-    
-    
-                    a, b, c = params
-    
-                    #find residuals
-    
-                    res = rise_flux - quad(rise_time, a, b, c)
-
-                #we want to check these residuals for three consecutive values above
-                #2σ, goes all the way to the peak, maybe worth revision
-
-                #initialize secondary condition
-
-                left_secondary = False
-
-                for k in range(len(res) - 3):
-
-                    if ((res[k] > sec_flare_std * flux_std) and
-                        (res[k + 1] > sec_flare_std * flux_std) and
-                        (res[k + 2] > sec_flare_std * flux_std)):
-
-                        #three consecutive points, there's a flare
-
-                        left_secondary = True
-
-
-                
-
-                
-                
-                #################VISUALIZING THE FIT################
-
-                if visualize_fit == True:
-
-                    if rise_func == 'gaussian':
-
-
-                        #Plot all flux points
-            
-                        plt.figure(figsize = (10,8))
-                        
-                        plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                        plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-
-                        #Plot all points belonging to the flare
-
-                        plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                    normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                    color = primary_color, label = 'Flare Points')
-                        plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                     normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                     yerr = flux_std, linestyle = '', color = primary_color)
-
-                        #plot flares
-                        
-                        plt.scatter(flare_time, flare_flux, marker = '*', s = 100, color = primary_color, label = 'Flare',
-                                   zorder = 10)
-
-
-                        #plot threshold line
-                        
-                            
-                        plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                 linewidth = 3, label = str(magic_flare_std) + 'σ')
-        
-                        #plot quadratic
-        
-                        plt.plot(rise_time, guassian_rise(rise_time, alpha, sigma, c), color = fit_color)
-                        plt.xlabel('Time (days)', fontsize = fontsize)
-                        plt.ylabel('Detrended flux', fontsize = fontsize)
-                        plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                        plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                        plt.ylim(0.98, flare_flux + 0.05)
-                        plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                                   np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                        plt.tick_params(direction = 'in', labelsize = labelsize)
-                        plt.legend(fontsize = fontsize)
-                        plt.show()
-        
-        
-                        #plot the residuals
-        
-                        plt.figure(figsize = (10,8))
-        
-                        plt.errorbar(np.arange(0, len(res)), res, yerr = flux_std, color = cadence_color)
-                        plt.scatter(np.arange(0, len(res)), res, color = cadence_color)
-                            
-                        plt.hlines(sec_flare_std * flux_std, 0, len(res), color = threshold_color,
-                                 linewidth = 3, linestyle = '--')
-        
-                        plt.xlabel('Rise Point Index', fontsize = fontsize)
-                        plt.ylabel('Residual Flux', fontsize = fontsize)
-                        plt.ylim(min(res) - 0.05, max(res) + 0.05)
-                        plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                        plt.tick_params(direction = 'in', labelsize = labelsize)
-                        #plt.legend(fontsize = fontsize)
-                        plt.show()
-                        
-
-                    if rise_func == 'quad':
-
-
-                        #Plot all flux points
-            
-                        plt.figure(figsize = (10,8))
-                        
-                        plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                        plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-
-                        #Plot all points belonging to the flare
-
-                        plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                    normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                    color = primary_color, label = 'Flare Points')
-                        plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                     normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                     yerr = flux_std, linestyle = '', color = primary_color)
-
-                        #plot flares
-                        
-                        plt.scatter(flare_time, flare_flux, marker = '*', s = 100, color = primary_color, label = 'Flare',
-                                   zorder = 10)
-                        
-                            
-                        plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                 linewidth = 3, label = str(magic_flare_std) + 'σ')
-        
-                        #plot quadratic
-        
-                        plt.plot(rise_time, quad(rise_time, a, b, c), color = fit_color)
-                        plt.xlabel('Time (days)', fontsize = fontsize)
-                        plt.ylabel('Detrended flux', fontsize = fontsize)
-                        plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                        plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                        plt.ylim(0.98, flare_flux + 0.05)
-                        plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                               np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                        plt.tick_params(direction = 'in', labelsize = labelsize)
-                        plt.legend(fontsize = fontsize)
-                        plt.show()
-        
-        
-                        #plot the residuals
-        
-                        plt.figure(figsize = (10,8))
-        
-                        plt.errorbar(np.arange(0, len(res)), res, yerr = flux_std, color = cadence_color)
-                        plt.scatter(np.arange(0, len(res)), res, color = cadence_color)
-                            
-                        plt.hlines(sec_flare_std * flux_std, 0, len(res), color = threshold_color,
-                                 linewidth = 3, linestyle = '--')
-        
-                        plt.xlabel('Rise Point Index', fontsize = fontsize)
-                        plt.ylabel('Residual Flux', fontsize = fontsize)
-                        plt.ylim(min(res) - 0.05, max(res) + 0.05)
-                        plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                        plt.tick_params(direction = 'in', labelsize = labelsize)
-                        #plt.legend(fontsize = fontsize)
-                        plt.show()
-
-
-
-
-
-
-                ###################FINDING OUTLIER POINTS###################
-
-                #if we have multiple consecutive points of high res we have a flare
-                #now find the peak and add it to list
-
-                if left_secondary == True:
-
-                    #the peak of the secondary is the one of highest flux with high residual
-                    #and two other points above the residual
-
-                    #Find the points of high residuals, uses lowered threshold
-                    #we want to use points at least three points to the left
-
-                    high_res_point = res > sec_flare_std * flux_std
-
-                    #find all the points that have two neighboring points of high residual
-
-                    bright_neighbors = np.full(len(res), 0, dtype = bool)
-
-                    #again, start at fourth point and keep previous points false
-
-                    for k in range(len(res)):
-
-                        #initialize neighboring conditions to see if next three points are
-                        #above the threshold
-
-                        three_right = False
-
-                        #or if the 1st point itself is the beginning and there are two more to the right
-
-                        two_right = False
-
-
-                        three_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                     (res[k+2] > sec_flare_std * flux_std) &
-                                     (res[k+3] > sec_flare_std * flux_std))
-
-                        two_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                     (res[k+2] > sec_flare_std * flux_std) &
-                                     (res[k] > sec_flare_std * flux_std))
-
-                        #if any of these are true we have three consecutive bright points
-
-                        if two_right == True:
-
-                            #tally of how many points to the right of k are bright, can assume it's at least two
-    
-                            extra = 2
-
-                            #keep searching until they dip back down or we reach the edge
-    
-                            while res[k + extra] >= sec_flare_std * flux_std:
-
-                                #check to see if adding one more index will cause overflow
-    
-                                if k + extra >= len(res) - 3:
-    
-                                    break
-
-                                extra += 1
-    
-                            secondary_indices = np.arange(k, k + extra)
-
-                            #exit the loop
-
-                            break
-
-                        
-
-                        elif three_right == True:
-
-                            #tally of how many points to the right of k are bright, can assume it's at least two
-    
-                            extra = 2
-
-                            #keep searching until they dip back down or we reach the edge
-    
-                            while res[k + 1 + extra] >= sec_flare_std * flux_std:
-
-                                #check to see if adding one more index will cause overflow
-    
-                                if k + extra >= len(res) - 3:
-    
-                                    break
-
-                                extra += 1
-    
-                            secondary_indices = np.arange(k + 1, k + extra)
-
-                            #exit the loop
-
-                            break
-
-
-                    #now find the point meeting these two conditions with the highest flux
-
-                    #we need to be careful about the indices here, high_res_points is just looking
-                    #at the indices between the beginning and peak of the flare, if we add the index of 
-                    #the beginning we'll get the index in the lightcurve
-
-                    secondary_peak_index = np.where((normalized_flux[rise_indices] ==
-                                                     max(normalized_flux[rise_indices][secondary_indices])))[0]
-
-                    #quickly pull out the amp of the secondary
-                    
-                    sec_flare_amp = res[secondary_peak_index][0]
-
-                    #and the amp in terms of sigma
-
-                    sec_flare_amp_sigma = sec_flare_amp/(flux_std)
-
-                    #also pull out the equivalent duration
-
-                    sec_equivalent_duration = np.trapz(res[secondary_indices],
-                                                       x = time[secondary_indices + time_start_flare_index])
-
-                    #convert to seconds
-
-                    sec_equivalent_duration *= 86400
-
-                    
-
-                    #set the index of the secondary to be along the whole lightcurve
-                    #rather than just in the rise
-
-                    secondary_peak_index += time_start_flare_index
-
-                    secondary_indices += time_start_flare_index
-
-
-                    
-
-                    if normalized_flux[secondary_peak_index][0] > median_flux + magic_flare_std * flux_std:
-
-                        #now we can get the amp and the time
-                        #right now it's pretty rudimentary and we just have the beginning and end in the same
-                        #timw as the peak with no calculated equivalent duration, but that will be later work
-    
-                        flare_peak_times.append(time[secondary_peak_index][0])
-            
-                        flare_start_times.append(time[min(secondary_indices)])
-            
-                        flare_end_times.append(time[max(secondary_indices)])
-            
-                        #make sure to subtract one from the fluxes to isolate
-                        #the amp of the flare
-            
-                        flare_amps.append(sec_flare_amp)
-    
-                        #########LATER WORK: CALCULATE THE ENERGY FOR THESE FLARES#######
-            
-                        flare_equivalent_durations.append(sec_equivalent_duration)
-
-                        ############ADD THE FLAGS#############
-
-                        #this was a secondary detection
-
-                        primary_or_secondary.append('secondary')
-
-
-                        #there are at least three points in the flare, it's given by the bright points argument
-
-                        num_in_sec = len(np.where((normalized_flux[secondary_indices])[0]))
-
-                        points_in_flare.append(num_in_sec)
-
-
-                        ## All of these points should be above the threshold
-
-                        points_abv_threshold.append(num_in_sec)
-
-
-                        ##And the amp sigma
-
-                        amp_sigma.append(sec_flare_amp_sigma)
-
-
-                        #################VISUALIZING THE FIT################
-
-                        if visualize_fit == True:
-
-
-                            if rise_func == 'gaussian':
-
-
-                                #Plot all flux points
-            
-                                plt.figure(figsize = (10,8))
-                                
-                                plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                                plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-        
-                                #Plot all points belonging to the flare
-        
-                                plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                            normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                            color = primary_color, label = 'Flare Points')
-                                plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                             normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                             yerr = flux_std, linestyle = '', color = primary_color)
-        
-                                #plot flares
-                                
-                                plt.scatter(flare_time, flare_flux, marker = '*', s = 100,
-                                            color = primary_color, label = 'Primary Flare', zorder = 10)
-                                plt.scatter(time[secondary_peak_index][0], normalized_flux[secondary_peak_index][0],
-                                            marker = '*', s = 100, color = secondary_color, label = 'Secondary Flare',
-                                   zorder = 10)
-                                
-                                    
-                                plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                         linewidth = 3, label = str(magic_flare_std) + 'σ')
-                
-                                #plot gaussian
-                
-                                #plt.plot(rise_time, guassian_rise(rise_time, alpha, sigma, c), color = fit_color)
-                                plt.xlabel('Time (days)', fontsize = fontsize)
-                                plt.ylabel('Detrended flux', fontsize = fontsize)
-                                plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                                plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                                plt.ylim(0.98, flare_flux + 0.05)
-                                plt.tick_params(direction = 'in', labelsize = labelsize)
-                                plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                                            np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                                plt.legend(fontsize = fontsize)
-                                plt.show()
-                        
-
-                            if rise_func == 'quad':
-        
-        
-                                #Plot all flux points
-            
-                                plt.figure(figsize = (10,8))
-                                
-                                plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                                plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-        
-                                #Plot all points belonging to the flare
-        
-                                plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                            normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                            color = primary_color, label = 'Flare Points')
-                                plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                             normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                             yerr = flux_std, linestyle = '', color = primary_color)
-        
-                                #plot flares
-                                
-                                plt.scatter(flare_time, flare_flux, marker = '*', s = 100,
-                                            color = primary_color, label = 'Primary Flare',
-                                           zorder = 10)
-                                plt.scatter(time[secondary_peak_index][0], normalized_flux[secondary_peak_index][0],
-                                            marker = '*', s = 100, color = secondary_color, label = 'Secondary Flare',
-                                   zorder = 10)
-                                
-                                    
-                                plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                         linewidth = 3, label = str(magic_flare_std) + 'σ')
-                
-                                #plot quad
-                
-                                #plt.plot(rise_time, quad(rise_time, a, b, c), color = fit_color)
-                                plt.xlabel('Time (days)', fontsize = fontsize)
-                                plt.ylabel('Detrended flux', fontsize = fontsize)
-                                plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                                plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                                plt.ylim(0.98, flare_flux + 0.05)
-                                plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                                           np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                                plt.tick_params(direction = 'in', labelsize = labelsize)
-                                plt.legend(fontsize = fontsize)
-                                plt.show()
-
-
-
-            ####WE ALSO NEED TO MAKE A CONDITION THAT IF THE FIT IS AWFUL WE'LL REFIT THE LINE
-            #AND ONLY INCLUDE THE POINTS THAT MONOTONICALLY DECREASE TO SEE IF THERES A LARGE COMPLEX
-            #TO THE LEFT
-
-
-
-            ######################RIGHT SEARCH#######################
-
-
-            #Now comes the harder one in principle, we need to fit an exponential to the decay and look for
-            #high res points. We should really only bother doing this if we have enough points. We'll be discounting
-            #the residuals of the first four points and looking for at least three to be above the secondary threshold
-            #so we need at least six points to the right of the peak
-
-            if time_end_flare_index - time_peak_flare_index >= 6:
-
-                #define a double exponential decay that starts at the flare peak time
-
-                def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
-
-                    return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
-                            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
-
-                #run a curve fit on the decay portion of the curve with the error
-
-                #pull out the indices involved
-
-                decay_indices = np.arange(time_peak_flare_index, time_end_flare_index+1)
-
-                #pull out the times involved
-
-                decay_times = time[time_peak_flare_index:time_end_flare_index+1]
-
-                #and the fluxes
-
-                decay_fluxes = normalized_flux[time_peak_flare_index:time_end_flare_index+1]
-
-                #and their errors
-
-                decay_flux_err = flux_err[time_peak_flare_index:time_end_flare_index+1]
-
-                #initial parameter guess
-
-                #alphas should add up to flare flux
-
-                alpha_0_i = 0.67 * flare_flux
-
-                alpha_1_i = 0.33 * flare_flux
-
-                #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
-
-                beta_0_i = 500
-
-                beta_1_i = 100
-
-                C_i = 1
-
-                p0 = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
-
-                sigma = decay_flux_err
-                #sigma[0] = 0.01 * sigma[0]
-
-
-                
-
-                #curve fit
-
-                params, cov = scipy.optimize.curve_fit(dbl_exp_decay, decay_times, decay_fluxes,
-                                                       sigma = sigma, p0 = p0, maxfev=1000000,
-                                                       bounds = (0, [np.inf, np.inf, np.inf, np.inf, np.inf]))
-
-
-
-                #Find the residuals
-
-                alpha_0, beta_0, alpha_1, beta_1, C = params
-
-                #make a copy
-
-                alpha_0_first, beta_0_first, alpha_1_first, beta_1_first, C_first = params
-
-                res = decay_fluxes - dbl_exp_decay(decay_times, alpha_0, beta_0, alpha_1, beta_1, C)
-
-                #we want to check these residuals for three consecutive values above
-                #2σ, starts at the 4th point from the peak, we don't expect one earlier 
-
-                #initialize secondary condition
-
-                right_secondary = False
-
-                for k in range(4, len(res) - 2):
-
-                    if ((res[k] > sec_flare_std * flux_std) and
-                        (res[k + 1] > sec_flare_std * flux_std) and
-                        (res[k + 2] > sec_flare_std * flux_std)):
-
-                        #three consecutive points, there's a flare
-
-                        right_secondary = True
-
-
-                #################VISUALIZING THE FIT################
-
-                if visualize_fit == True:
-
-
-                    #Plot all flux points
-            
-                    plt.figure(figsize = (10,8))
-                    
-                    plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                    plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-    
-                    #Plot all points belonging to the flare
-    
-                    plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                color = primary_color, label = 'Flare Points')
-                    plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                 normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                 yerr = flux_std, linestyle = '', color = primary_color)
-    
-                    #plot flares
-                    
-                    plt.scatter(flare_time, flare_flux, marker = '*', s = 100, color = primary_color, label = 'Flare',
-                               zorder = 10)
-                    
-                        
-                    plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                             linewidth = 3, label = str(magic_flare_std) + 'σ')
-    
-                    #plot dbl exp fit
-    
-                    plt.plot(decay_times, dbl_exp_decay(decay_times, alpha_0, beta_0, alpha_1, beta_1, C),
-                             color = fit_color)
-                    plt.xlabel('Time (days)', fontsize = fontsize)
-                    plt.ylabel('Detrended flux', fontsize = fontsize)
-                    plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                    plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                    plt.ylim(0.98, flare_flux + 0.05)
-                    plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                               np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                    plt.tick_params(direction = 'in', labelsize = labelsize)
-                    plt.legend(fontsize = fontsize)
-                    plt.show()
-    
-                    #plot the residuals
-    
-                    plt.figure(figsize = (10,8))
-    
-                    plt.errorbar(np.arange(0, len(res)), res, yerr = flux_std, color = cadence_color)
-                    plt.scatter(np.arange(0, len(res)), res, color = cadence_color)
-                        
-                    plt.hlines(sec_flare_std * flux_std, 0, len(res), color = threshold_color,
-                             linewidth = 3, linestyle = '--')
-    
-                    plt.xlabel('Decay Point Index', fontsize = fontsize)
-                    plt.ylabel('Residual Flux', fontsize = fontsize)
-                    plt.ylim(min(res) - 0.05, max(res) + 0.05)
-                    plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                    plt.tick_params(direction = 'in', labelsize = labelsize)
-                    #plt.legend(fontsize = fontsize)
-                    plt.show()
-
-
-                ###################FINDING OUTLIER POINTS###################         
-
-                #if we have multiple consecutive points of high res we have a flare
-                #now find the peak and add it to list
-
-                if right_secondary == True:
-
-                    #drop the first four points of the decay features
-
-                    res = res[4:]
-
-                    decay_indices = decay_indices[4:]
-
-                    #the peak of the secondary is the one of highest flux with high residual
-                    #and two other points above the residual
-
-                    #Find the points of high residuals, uses lowered threshold
-                    #we want to use points at least three points to the left
-
-                    high_res_point = res > sec_flare_std * flux_std
-
-                    #find all the points that have two neighboring points of high residual
-
-                    bright_neighbors = np.full(len(res), 0, dtype = bool)
-
-                    #again, start at fourth point and keep previous points false
-
-                    for k in range(len(res)):
-
-                        #initialize neighboring conditions to see if next three points are
-                        #above the threshold
-
-                        three_right = False
-
-                        #or if the 4th point itself is the beginning and there are two more to the right
-
-                        two_right = False
-
-                        #if there are only three points in the residual then it must be the two_right case
-
-                        if len(res) >= 4:
-
-                            three_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                         (res[k+2] > sec_flare_std * flux_std) &
-                                         (res[k+3] > sec_flare_std * flux_std))
-                            
-
-                        two_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                     (res[k+2] > sec_flare_std * flux_std) &
-                                     (res[k] > sec_flare_std * flux_std))
-
-                        #if any of these are true we have three consecutive bright points
-
-                        if two_right == True:
-
-                            #tally of how many points to the right of k are bright, can assume it's at least two
-    
-                            extra = 2
-
-                            #keep searching until they dip back down or we reach the edge
-    
-                            while res[k + extra] >= sec_flare_std * flux_std:
-
-                                #check to see if adding one more index will cause overflow
-    
-                                if k + extra >= len(res) - 3:
-    
-                                    break
-
-                                #add extra index
-
-                                extra += 1
-    
-                            secondary_indices = np.arange(k, k + extra)
-
-                            #exit the loop
-
-                            break
-
-                        
-
-                        elif three_right == True:
-
-                            #tally of how many points to the right of k are bright, can assume it's at least two
-    
-                            extra = 2
-
-                            #keep searching until they dip back down or we reach the edge
-    
-                            while res[k + 1 + extra] >= sec_flare_std * flux_std:
-
-                                #check to see if adding one more index will cause overflow
-    
-                                if k + extra >= len(res) - 3:
-    
-                                    break
-
-                                #add extra index
-
-                                extra += 1
-    
-                            secondary_indices = np.arange(k + 1, k + extra)
-
-                            #exit the loop
-
-                            break
-
-                            
-
-                    #now find the point meeting these two conditions with the highest flux
-
-                    #we need to be careful about the indices here, high_res_points is just looking
-                    #at the indices between the beginning and peak of the flare, if we add the index of 
-                    #the beginning we'll get the index in the lightcurve
-
-                    secondary_peak_index = np.where((normalized_flux[decay_indices] ==
-                                                     max(normalized_flux[decay_indices][secondary_indices])))[0]
-
-
-                    #quickly pull out the amp of the secondary
-                    
-                    sec_flare_amp = res[secondary_peak_index][0]
-
-                    #and the amp in terms of sigma
-
-                    sec_flare_amp_sigma = sec_flare_amp/(flux_std)
-
-                    #also pull out the equivalent duration
-
-                    sec_equivalent_duration = np.trapz(res[secondary_indices],
-                                                       x = time[secondary_indices + time_peak_flare_index])
-
-                    #convert to seconds
-
-                    sec_equivalent_duration *= 86400
-
-                    
-
-                    #set the index of the secondary to be along the whole lightcurve
-                    #rather than just in the rise
-
-                    secondary_peak_index += time_peak_flare_index + 4
-
-                    secondary_indices += time_peak_flare_index + 4
-
-                    
-                    if normalized_flux[secondary_peak_index][0] > median_flux + magic_flare_std * flux_std:
-
-                        #now we can get the amp and the time
-                        #right now it's pretty rudimentary and we just have the beginning and end in the same
-                        #timw as the peak with no calculated equivalent duration, but that will be later work
-    
-                        flare_peak_times.append(time[secondary_peak_index][0])
-            
-                        flare_start_times.append(time[min(secondary_indices)])
-            
-                        flare_end_times.append(time[max(secondary_indices)])
-            
-                        #make sure to subtract one from the fluxes to isolate
-                        #the amp of the flare
-            
-                        flare_amps.append(sec_flare_amp)
-    
-                        #########LATER WORK: CALCULATE THE ENERGY FOR THESE FLARES#######
-            
-                        flare_equivalent_durations.append(sec_equivalent_duration)
-
-
-                        ############ADD THE FLAGS#############
-
-                        #this was a secondary detection
-
-                        primary_or_secondary.append('secondary')
-
-
-                        #there are at least three points in the flare, it's given by the bright points argument
-
-                        num_in_sec = len(np.where((normalized_flux[secondary_peak_index]))[0])
-
-                        points_in_flare.append(num_in_sec)
-
-
-                        ## All of these points should be above the threshold
-
-                        points_abv_threshold.append(num_in_sec)
-
-
-                        ##And the amp sigma
-
-                        amp_sigma.append(sec_flare_amp_sigma)
-
-
-
-                        #################VISUALIZING THE FIT################
-
-                        if visualize_fit == True:
-
-    
-                            #Plot all flux points
-            
-                            plt.figure(figsize = (10,8))
-                            
-                            plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                            plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-    
-                            #Plot all points belonging to the flare
-    
-                            plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                        normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                        color = primary_color, label = 'Flare Points')
-                            plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                         normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                         yerr = flux_std, linestyle = '', color = primary_color)
-    
-                            #plot flares
-                            
-                            plt.scatter(flare_time, flare_flux, marker = '*', s = 100, color = primary_color, label = 'Primary Flare',
-                                       zorder = 10)
-    
-                            plt.scatter(time[secondary_peak_index][0], normalized_flux[secondary_peak_index][0],
-                                        marker = '*', s = 100, color = secondary_color, zorder = 9, label = 'Secondary Flare')
-                            
-                                
-                            plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                     linewidth = 3, label = str(magic_flare_std) + 'σ')
-            
-                            #plot double exponential
-            
-                            #plt.plot(decay_times, dbl_exp_decay(decay_times, alpha_0, beta_0, alpha_1, beta_1, C), color = 'blue')
-                            plt.xlabel('Time (days)', fontsize = fontsize)
-                            plt.ylabel('Detrended flux', fontsize = fontsize)
-                            plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                            plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                            plt.ylim(0.98, flare_flux + 0.05)
-                            plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                                       np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                            plt.tick_params(direction = 'in', labelsize = labelsize)
-                            plt.legend(fontsize = fontsize)
-                            plt.show()
-
-
-                    ###################SEE IF THERE ARE MORE SECONDARIES###############
-
-                    #We've found one secondary in the decay, but let's see if there's at
-                    #least one more!
-
-                    if fit_multiple_secs == True:
-
-                        #keep looking AFTER the indices of the secondaries to see if
-                        #there are more
-
-                        #the comb of high_res_point & bright_neighbors tells us
-                        #where they are
-
-                        #search in the boolean array to find the features (where the value
-                        #is True. They're each labeled with a unique label. We can pull out
-                        #the labels with at least three entries. The first one is the one we
-                        #identified. The rest we didn't.
-
-                        #recall we already chopped off the first three cadences in the residual
-                        #so this boolean list is only for that fourth index and beyond
-
-                        #convery boolean array into 1's and 0's
-
-                        #the peak of the secondary is the one of highest flux with high residual
-                    
-                        #and two other points above the residual
-
-                        #Find the points of high residuals, uses lowered threshold
-                        #we want to use points at least three points to the left
-    
-                        high_res_point = res > sec_flare_std * flux_std
-    
-                        #find all the points that have two neighboring points of high residual
-    
-                        bright_neighbors = np.full(len(res), 0, dtype = bool)
-    
-                        for k in range(len(res)):
-    
-                            #initialize neighboring conditions
-    
-                            two_left = False
-    
-                            two_surrounding = False
-    
-                            two_right = False
-    
-                            #list the conditions for neighboring
-    
-                            if k >= 2:
-    
-                                #the two points to the left are bright
-    
-                                two_left = ((res[k-2] > sec_flare_std * flux_std) &
-                                            (res[k-1] > sec_flare_std * flux_std))
-    
-                            if k >= 1 and k <= len(res) - 2:
-    
-                                #the two surrounding points are bright
-    
-                                two_surrounding = ((res[k-1] > sec_flare_std * flux_std) &
-                                                   (res[k+1] > sec_flare_std * flux_std))
-    
-                            if k <= len(res) - 3:
-    
-                                #the two points to the right are bright
-    
-                                two_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                             (res[k+2] > sec_flare_std * flux_std))
-    
-                            #if any of these are true we have three consecutive bright points
-    
-                            if (two_left == True) or (two_surrounding == True) or (two_right == True):
-    
-                                bright_neighbors[k] = True
-
-                        
-                        #convery boolean array into 1's and 0's                                
-
-                        int_feature = np.asarray([high_res_point & bright_neighbors], dtype = int)[0]
-
-                        #find features
-
-                        labeled_array, num_features = scipy.ndimage.label(int_feature)
-
-                        #if there are two features then try for second
-                        #JUST BECAUSE THERE ARE TWO FEATURES DOESN'T MEAN THERE ARE TWO SECONDARIES!!!!
-
-                        if num_features > 1:
-
-                            #make sure we have a condition telling us whether we already
-                            #found the first secondary
-    
-                            first_sec_found = False
-    
-                            for value in range(1, max(np.unique(labeled_array)) + 1):
-    
-                                #see if there are three entries for this
-                                #value in the features
-    
-                                if len(np.where((labeled_array == value))[0]) >= 3:
-
-                                    #if this is the first time we come across this that
-                                    #means it's the secondary we already found
-
-                                    if first_sec_found == False:
-
-                                        first_sec_found = True
-
-                                        continue
-
-                                    #if not, then we found another secondary!
-
-                                    #indices of the secondary secondary flare
-                                    
-                                    tertiary_flare_indices = np.where((labeled_array == value))[0]
-                                    
-
-                                    #find amp and t-peak
-
-                                    tertiary_peak_index = np.where((normalized_flux[decay_indices] == 
-                                                                 max(normalized_flux[decay_indices][tertiary_flare_indices])))[0]
-
-                                    #quickly pull out the amp of the secondary
-                    
-                                    tertiary_flare_amp = res[tertiary_peak_index][0]
-                
-                                    #and the amplitude in terms of sigma
-                
-                                    tertiary_flare_amp_sigma = tertiary_flare_amp/(flux_std)
-
-                                    #with the residual we can also calculate the equivalent duration
-
-                                    tertiary_equivalent_duration = np.trapz(res[tertiary_flare_indices],
-                                             x = time[tertiary_flare_indices + time_peak_flare_index + 4])
-
-                                    tertiary_equivalent_duration *= 86400
-
-                                    #set the index of the tertiary to be along the whole lightcurve
-                                    #rather than just in the rise
-
-
-                                    tertiary_flare_indices += time_peak_flare_index + 4
-
-                                    tertiary_peak_index += time_peak_flare_index + 4
-                
-
-                                    #print(time[tertiary_peak_index])
-                
-                                    
-                                    if normalized_flux[tertiary_peak_index][0] > median_flux + magic_flare_std * flux_std:
-                
-                                        #now we can get the amp and the time
-                                        #right now it's pretty rudimentary and we just have the beginning and end in the same
-                                        #timw as the peak with no calculated equivalent duration, but that will be later work
-                    
-                                        flare_peak_times.append(time[tertiary_peak_index][0])
-                            
-                                        flare_start_times.append(time[min(tertiary_flare_indices)])
-                            
-                                        flare_end_times.append(time[max(tertiary_peak_index)])
-                            
-                                        #make sure to subtract one from the fluxes to isolate
-                                        #the amp of the flare
-                            
-                                        flare_amps.append(tertiary_flare_amp)
-                    
-                                        #########LATER WORK: CALCULATE THE ENERGY FOR THESE FLARES#######
-                            
-                                        flare_equivalent_durations.append(tertiary_equivalent_duration)
-                
-                
-                                        ############ADD THE FLAGS#############
-                
-                                        #this was a secondary detection
-                
-                                        primary_or_secondary.append('tertiary')
-                
-                
-                                        #there are at least three points in the flare, it's given by the bright points argument
-                
-                                        num_in_sec = len(np.where((normalized_flux[tertiary_peak_index]))[0])
-                
-                                        points_in_flare.append(num_in_sec)
-                
-                
-                                        ## All of these points should be above the threshold
-                
-                                        points_abv_threshold.append(num_in_sec)
-                
-                
-                                        ##And the amp sigma
-                
-                                        amp_sigma.append(tertiary_flare_amp_sigma)
-
-                                        #################VISUALIZING THE FIT################
-
-                                        if visualize_fit == True:
-                
-                    
-                                            #Plot all flux points
-                        
-                                            plt.figure(figsize = (10,8))
-                                            
-                                            plt.scatter(time, normalized_flux, s = 10, color = cadence_color,
-                                                        label = 'Background Points')
-                                            plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-                    
-                                            #Plot all points belonging to the flare
-                    
-                                            plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                                        normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                                        color = primary_color, label = 'Flare Points')
-                                            plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                                         normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                                         yerr = flux_std, linestyle = '', color = primary_color)
-                    
-                                            #plot flares
-                                            
-                                            plt.scatter(flare_time, flare_flux, marker = '*', s = 100, color = primary_color,
-                                                        label = 'Primary Flare', zorder = 10)
-                    
-                                            plt.scatter(time[secondary_peak_index][0], normalized_flux[secondary_peak_index][0],
-                                                        marker = '*', s = 100, color = secondary_color,
-                                                        zorder = 6, label = 'Secondary Flare')
-
-                                            plt.scatter(time[tertiary_peak_index][0], normalized_flux[tertiary_peak_index][0],
-                                                        marker = '*', s = 100, color = tertiary_color,
-                                                        zorder = 10, label = 'Tertiary Flare')
-                                            
-                                                
-                                            plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std),
-                                                     color = threshold_color,
-                                                     linewidth = 3, label = str(magic_flare_std) + 'σ')
-                            
-                                            #plot decay
-                            
-                                            #plt.plot(decay_times, dbl_exp_decay(decay_times, alpha_0,
-                                            #                                    beta_0, alpha_1, beta_1, C), color = fit_color)
-                                            plt.xlabel('Time (days)', fontsize = fontsize)
-                                            plt.ylabel('Detrended flux', fontsize = fontsize)
-                                            plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                                            plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                                            plt.ylim(0.98, flare_flux + 0.05)
-                                            plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                                                        np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                                            plt.tick_params(direction = 'in', labelsize = labelsize)
-                                            plt.legend(fontsize = fontsize)
-                                            plt.show()
-
-                                    
-
-                        
-
-                
-
-            
-                ####################FIT TWICE########################
-
-                # Let's see if we should try this fit again if there are
-                # some marginal non-detections
-
-                #drop the first four points of the decay features
-
-                if (fit_twice == True) and (right_secondary == False):
-
-                    marginal_flare = False
-
-                    #see if there are marginal non-detections of a little less
-                    #than the secondary sigma threshold
-
-                    for k in range(4, len(res) - 2):
-
-                        #test if there are three points above a slightly
-                        #lowered threshold
-
-                        if ((res[k] > sec_marginal_threshold * flux_std) and
-                            (res[k + 1] > sec_marginal_threshold * flux_std) and
-                            (res[k + 2] > sec_marginal_threshold * flux_std)):
-    
-                                marginal_flare = True
-                            
-
-                    #if there is one let's clip those points and refit!
-
-                    if marginal_flare == True:
-
-                        #res = res[4:]
-
-                        #decay_indices = decay_indices[4:]
-
-                        #find the consecutive points in question
-
-                        #loop through the residual points and count how many
-                        #in a row are above the marginal threshold
-
-                        marginal_indices = np.where((res[4:] > sec_marginal_threshold * flux_std))[0]
-
-                        #go through these indices above the threshold and see in the next
-                        #two points to the right are above the threshold
-
-                        little_flare_indices = []
-
-                        for index in marginal_indices:
-
-                            #see how many more to the right are above the threshold
-
-                            extra = 3
-
-                            #hopefully this condition is never used because we
-                            #know there is a little flare so we never loop to the end
-
-                            if index >= len(res) - 3:
-
-                                break
-
-                            #if the next three points are above mini threshold we've
-                            #found it!
-
-                            if ((res[index] >  sec_marginal_threshold * flux_std) &
-                                (res[index + 1] >  sec_marginal_threshold * flux_std) &
-                                (res[index + 2] >  sec_marginal_threshold * flux_std)):
-
-                                #fun edge cases to make sure we don't go over the extent of the flare
-
-                                if index == len(res) - 3:
-
-                                    break
-                                    
-
-                                while res[index + extra] >  sec_marginal_threshold * flux_std:
-
-                                    #if we're at the end of the flare stop looking
-
-                                    if index + extra >= len(res) - 1:
-
-                                        break
-
-                                    #add one to keep searching to the right
-
-                                    extra += 1
-
-                                #okay we have the indices, we don't need to loop anymore!
-
-                                break
-
-                            little_flare_indices = np.arange(index, index + extra)
-
-                        #clip those guys and redo the fit
-
-                        #indices we WILL use in refit
-
-                        #refit_indices = (np.arange(0, len(res)) != little_flare_indices)
-
-                        refit_indices = np.setdiff1d(np.arange(0, len(res)), little_flare_indices)
-
-                        #run a curve fit on the decay portion of the curve with the error
-
-                        #pull out the indices involved
-        
-                        decay_indices = decay_indices[refit_indices]
-        
-                        #pull out the times involved
-        
-                        decay_times = decay_times[refit_indices]
-        
-                        #and the fluxes
-        
-                        decay_fluxes = decay_fluxes[refit_indices]
-        
-                        #and their errors
-        
-                        decay_flux_err = decay_flux_err[refit_indices]
-        
-                        #initial parameter guess
-        
-                        #alphas should add up to flare flux
-        
-                        alpha_0_i = 0.67 * flare_flux
-        
-                        alpha_1_i = 0.33 * flare_flux
-        
-                        #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
-        
-                        beta_0_i = 500
-        
-                        beta_1_i = 100
-        
-                        C_i = 1
-        
-                        p0 = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
-        
-                        sigma = decay_flux_err
-                        sigma[0] = 0.01
-        
-        
-                        #curve fit
-        
-                        params, cov = scipy.optimize.curve_fit(dbl_exp_decay, decay_times, decay_fluxes,
-                                                               sigma = sigma, p0 = p0, maxfev=1000000,
-                                                               bounds = (0, [np.inf, np.inf, np.inf, np.inf, np.inf]))
-        
-        
-        
-                        #Find the residuals
-        
-                        alpha_0, beta_0, alpha_1, beta_1, C = params
-
-                        #Add the clipped points back in
-
-                        #pull out the indices involved
-        
-                        decay_indices = np.arange(time_peak_flare_index, time_end_flare_index+1)
-        
-                        #pull out the times involved
-        
-                        decay_times = time[time_peak_flare_index:time_end_flare_index+1]
-        
-                        #and the fluxes
-        
-                        decay_fluxes = normalized_flux[time_peak_flare_index:time_end_flare_index+1]
-        
-                        #and their errors
-        
-                        decay_flux_err = flux_err[time_peak_flare_index:time_end_flare_index+1]
-        
-                        res = decay_fluxes - dbl_exp_decay(decay_times, alpha_0, beta_0, alpha_1, beta_1, C)
-
-                        #now do a real secondary search
-
-                        #we want to check these residuals for three consecutive values above
-                        #2σ, starts at the 4th point from the peak, we don't expect one earlier 
-        
-                        #initialize secondary condition
-        
-                        right_secondary = False
-        
-                        for k in range(4, len(res) - 2):
-        
-                            if ((res[k] > sec_flare_std * flux_std) and
-                                (res[k + 1] > sec_flare_std * flux_std) and
-                                (res[k + 2] > sec_flare_std * flux_std)):
-        
-                                #three consecutive points, there's a flare
-        
-                                right_secondary = True
-        
-        
-                        #################VISUALIZING THE FIT################
-        
-                        if visualize_fit == True:
-        
-        
-                            #Plot all flux points
-            
-                            plt.figure(figsize = (10,8))
-                            
-                            plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                            plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-    
-                            #Plot all points belonging to the flare
-    
-                            plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                        normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                        color = primary_color, label = 'Flare Points')
-                            plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                         normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                         yerr = flux_std, linestyle = '', color = primary_color)
-    
-                            #plot flares
-                            
-                            plt.scatter(flare_time, flare_flux, marker = '*', s = 100, color = primary_color, label = 'Flare',
-                                       zorder = 10)
-                            
-                                
-                            plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                     linewidth = 3, label = str(magic_flare_std) + 'σ')
-            
-                            #plot dbl exp fit
-            
-                            plt.plot(decay_times, dbl_exp_decay(decay_times, alpha_0, beta_0, alpha_1, beta_1, C),
-                                     color = fit_color, linestyle = '--')
-                            plt.xlabel('Time (days)', fontsize = fontsize)
-                            plt.ylabel('Detrended flux', fontsize = fontsize)
-                            plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector) + ' Second Try', fontsize = fontsize)
-                            plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                            plt.ylim(0.98, flare_flux + 0.05)
-                            plt.xticks([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1],
-                                       np.round([flare_time - 0.02, flare_time + 0.04, flare_time + 0.1], 2))
-                            plt.tick_params(direction = 'in', labelsize = labelsize)
-                            plt.legend(fontsize = fontsize)
-                            plt.show()
-            
-                            #plot the residuals
-        
-                            plt.figure(figsize = (10,8))
-            
-                            plt.errorbar(np.arange(0, len(res)), res, yerr = flux_std, color = cadence_color)
-                            plt.scatter(np.arange(0, len(res)), res, color = cadence_color)
-                                
-                            plt.hlines(sec_flare_std * flux_std, 0, len(res), color = threshold_color,
-                                     linewidth = 3, linestyle = '--')
-            
-                            plt.xlabel('Decay Point Index', fontsize = fontsize)
-                            plt.ylabel('Residual Flux', fontsize = fontsize)
-                            plt.ylim(min(res) - 0.05, max(res) + 0.05)
-                            plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
-                            plt.tick_params(direction = 'in', labelsize = labelsize)
-                            #plt.legend(fontsize = fontsize)
-                            plt.show()
-        
-        
-        
-                        ###################FINDING OUTLIER POINTS###################         
-        
-                        #if we have multiple consecutive points of high res we have a flare
-                        #now find the peak and add it to list
-        
-                        if right_secondary == True:
-        
-                            #drop the first four points of the decay features
-        
-                            res = res[4:]
-        
-                            decay_indices = decay_indices[4:]
-        
-                            #the peak of the secondary is the one of highest flux with high residual
-                            #and two other points above the residual
-        
-                            #Find the points of high residuals, uses lowered threshold
-                            #we want to use points at least three points to the left
-        
-                            high_res_point = res > sec_flare_std * flux_std
-        
-                            #find all the points that have two neighboring points of high residual
-        
-                            bright_neighbors = np.full(len(res), 0, dtype = bool)
-        
-                            #again, start at fourth point and keep previous points false
-        
-                            for k in range(len(res)):
-
-                                #initialize neighboring conditions to see if next three points are
-                                #above the threshold
-        
-                                three_right = False
-        
-                                #or if the 4th point itself is the beginning and there are two more to the right
-        
-                                two_right = False
-        
-        
-                                #if there are only three points in the residual then it must be the two_right case
-
-                                if len(res) >= 4:
-        
-                                    three_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                                 (res[k+2] > sec_flare_std * flux_std) &
-                                                 (res[k+3] > sec_flare_std * flux_std))
-                                    
-        
-                                two_right = ((res[k+1] > sec_flare_std * flux_std) &
-                                             (res[k+2] > sec_flare_std * flux_std) &
-                                             (res[k] > sec_flare_std * flux_std))
-        
-                                #if any of these are true we have three consecutive bright points
-        
-                                if two_right == True:
-        
-                                    #tally of how many points to the right of k are bright, can assume it's at least two
-            
-                                    extra = 2
-        
-                                    #keep searching until they dip back down or we reach the edge
-            
-                                    while res[k + extra] >= sec_flare_std * flux_std:
-
-                                        #check to see if adding one index will cause overflow
-            
-                                        if k + extra >= len(res) - 3:
-            
-                                            break
-
-                                        #add index
-
-                                        extra += 1
-            
-                                    secondary_indices = np.arange(k, k + extra +1)
-        
-                                    #exit the loop
-        
-                                    break
-        
-                                
-        
-                                elif three_right == True:
-        
-                                    #tally of how many points to the right of k are bright, can assume it's at least two
-            
-                                    extra = 2
-        
-                                    #keep searching until they dip back down or we reach the edge
-            
-                                    while res[k + 1 + extra] >= sec_flare_std * flux_std:
-
-                                        #check to see if one more index will cause overflow
-            
-                                        if k + extra >= len(res) - 3:
-            
-                                            break
-
-                                        #add one index
-
-                                        extra += 1
-            
-                                    secondary_indices = np.arange(k + 1, k + extra + 1)
-        
-                                    #exit the loop
-        
-                                    break
-                                    
-        
-                            #now find the point meeting these two conditions with the highest flux
-
-                            #we need to be careful about the indices here, high_res_points is just looking
-                            #at the indices between the beginning and peak of the flare, if we add the index of 
-                            #the beginning we'll get the index in the lightcurve
-        
-                            secondary_peak_index = np.where((normalized_flux[decay_indices] ==
-                                                             max(normalized_flux[decay_indices][secondary_indices])))[0]
-        
-        
-                            #quickly pull out the amp of the secondary
-                            
-                            sec_flare_amp = res[secondary_peak_index][0]
-        
-                            #and the amp in terms of sigma
-        
-                            sec_flare_amp_sigma = sec_flare_amp/(flux_std)
-        
-                            #also pull out the equivalent duration
-        
-                            sec_equivalent_duration = np.trapz(res[secondary_indices],
-                                                               x = time[secondary_indices + time_peak_flare_index])
-        
-                            #convert to seconds
-        
-                            sec_equivalent_duration *= 86400
-        
-                            
-        
-                            #set the index of the secondary to be along the whole lightcurve
-                            #rather than just in the rise
-        
-                            secondary_peak_index += time_peak_flare_index + 4
-        
-                            secondary_indices += time_peak_flare_index + 4
-        
-                            
-                            if normalized_flux[secondary_peak_index][0] > median_flux + magic_flare_std * flux_std:
-        
-                                #now we can get the amp and the time
-                                #right now it's pretty rudimentary and we just have the beginning and end in the same
-                                #timw as the peak with no calculated equivalent duration, but that will be later work
-            
-                                flare_peak_times.append(time[secondary_peak_index][0])
-                    
-                                flare_start_times.append(time[min(secondary_indices)])
-                    
-                                flare_end_times.append(time[max(secondary_indices)])
-                    
-                                #make sure to subtract one from the fluxes to isolate
-                                #the amp of the flare
-                    
-                                flare_amps.append(sec_flare_amp)
-            
-                                #########LATER WORK: CALCULATE THE ENERGY FOR THESE FLARES#######
-                    
-                                flare_equivalent_durations.append(sec_equivalent_duration)
-        
-        
-                                ############ADD THE FLAGS#############
-        
-                                #this was a secondary detection
-        
-                                primary_or_secondary.append('secondary_second_try')
-        
-        
-                                #there are at least three points in the flare, it's given by the bright points argument
-        
-                                num_in_sec = len(np.where((normalized_flux[secondary_indices]))[0])
-        
-                                points_in_flare.append(num_in_sec)
-        
-        
-                                ## All of these points should be above the threshold
-        
-                                points_abv_threshold.append(num_in_sec)
-        
-        
-                                ##And the amp sigma
-        
-                                amp_sigma.append(sec_flare_amp_sigma)
-        
-        
-        
-                                #################VISUALIZING THE FIT################
-        
-                                if visualize_fit == True:
-        
-            
-                                    #Plot all flux points
-            
-                                    plt.figure(figsize = (10,8))
-                                    
-                                    plt.scatter(time, normalized_flux, s = 10, color = cadence_color, label = 'Background Points')
-                                    plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
-            
-                                    #Plot all points belonging to the flare
-
-                                    #primary flare
-            
-                                    plt.scatter(time[time_start_flare_index:time_end_flare_index + 1],
-                                                normalized_flux[time_start_flare_index:time_end_flare_index + 1], s = 10,
-                                                color = primary_color, label = 'Flare Points')
-                                    plt.errorbar(time[time_start_flare_index:time_end_flare_index + 1],
-                                                 normalized_flux[time_start_flare_index:time_end_flare_index + 1],
-                                                 yerr = flux_std, linestyle = '', capsize = 4, color = primary_color)
-
-                                    #secondary flare
-
-                                    plt.scatter(time[secondary_indices],
-                                                normalized_flux[secondary_indices], s = 10,
-                                                color = secondary_color, label = 'Flare Points')
-                                    plt.errorbar(time[secondary_indices],
-                                                 normalized_flux[secondary_indices],
-                                                 yerr = flux_std, linestyle = '', capsize = 4, color = secondary_color)
-            
-                                    #plot flares
-                                    
-                                    plt.scatter(flare_time, flare_flux, marker = '*',
-                                                color = primary_color, label = 'Primary Flare',
-                                               zorder = 10, s = 100)
-            
-                                    plt.scatter(time[secondary_peak_index][0], normalized_flux[secondary_peak_index][0],
-                                                marker = '*', color = secondary_color, zorder = 8,
-                                                s = 100, label  = 'Secondary Flare')
-                                    
-                                        
-                                    plt.plot(time, time * 0 + median_flux + (magic_flare_std * flux_std), color = threshold_color,
-                                             linewidth = 3, label = str(magic_flare_std) + 'σ')
-                    
-                                    #plot decay
-                    
-                                    plt.plot(decay_times, dbl_exp_decay(decay_times, alpha_0, beta_0,
-                                                                        alpha_1, beta_1, C),
-                                             linestyle = '--', color = fit_color)
-
-                                    #plot decay of first attempt
-
-                                    plt.plot(decay_times, dbl_exp_decay(decay_times, alpha_0_first, beta_0_first,
-                                                                        alpha_1_first, beta_1_first,
-                                                                        C_first),
-                                             linestyle = '-', color = fit_color)
-
-                                    
-                                    plt.xlabel('Time (days)', fontsize = fontsize, font = 'Serif')
-                                    plt.ylabel('Detrended flux', fontsize = fontsize, font = 'Serif')
-                                    #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector),
-                                    #          fontsize = fontsize, font = 'Serif')
-                                    plt.xlim(flare_time - 0.025, flare_time + 0.1)
-                                    plt.ylim(0.98, flare_flux + 0.05)
-                                    plt.xticks([flare_time - 0.01, flare_time + 0.04, flare_time + 0.1],
-                                               np.round([flare_time - 0.01, flare_time + 0.04, flare_time + 0.1], 2))
-                                    plt.tick_params(direction = 'in', labelsize = labelsize, 
-                                                   labelfontfamily = 'Serif')
-                                    #plt.legend(fontsize = fontsize)
-                                    plt.show()
-                            
-                        #if we didn't find another secondary then we'll label the primary as a failed second fit    
-                        
-                        else:
-    
-                            primary_or_secondary.append('primary_failed_dbl_fit')
-
-                
-            
-
-                
-
-            #find the flare energy by subtracting 1 from each point to elliminate the underlying
-            #continuum and integrate between the points
-            #we'll approximate the area between points as a trapazoid with bases equal to fluxes
-            #and height equal to difference in time coords
-        
-
-            #find area under curve as equivalent duration using trapezoidal rule
-
-            #Subract one to isolate contribution from flare
-
-            equivalent_duration = np.trapz(normalized_flux[time_start_flare_index:time_end_flare_index+1] - median_flux,
-                                           x = time[time_start_flare_index:time_end_flare_index+1])
-
-            #covert to seconds
-
-            days_to_seconds = 86400
-
-            equivalent_duration = equivalent_duration * 86400
-
-
-
-            ##### DELETE REDUNDANT POINTS BELONGING TO SAME FLARE########
-
-            time_candidates = np.delete(time_candidates, redundant_points)
-
-            flare_candidates = np.delete(flare_candidates, redundant_points)
-
-
-            #add these new characteristics to the running tally
-
-            flare_peak_times.append(flare_time)
-
-            flare_start_times.append(flare_start_time)
-
-            flare_end_times.append(flare_end_time)
-
-            #make sure to subtract one from the fluxes to isolate
-            #the amp of the flare
-
-            flare_amps.append(flare_flux - median_flux)
-
-            flare_equivalent_durations.append(equivalent_duration)
-
-
-            #########ADD THE FLAGS##########
-
-            #this was a primary flare
-            #if we tried double fitting and didn't find anything then the length of the
-            #list will have one too many entries and be the same length as the above flare amp list
-
-            #if they're not the same length then we still havent added it
-
-            if len(primary_or_secondary) != len(flare_equivalent_durations):
-
-                primary_or_secondary.append('primary')
-
-
-            #the points associated with the flare is given by the end and start indices
-
-            points_in_flare.append(time_end_flare_index - time_start_flare_index)
-
-
-            #and the number above threshold was given when checking for sufficient points
-
-            points_abv_threshold.append(num_past_threshold)
-
-
-            #and amp sigma
-
-            amp_sigma.append((flare_flux - median_flux)/(flux_std))
-
-            i = i + 1
-
-        #if it's not a true flare
-        
-        else:
-
-            time_candidates = np.delete(time_candidates, i)
-
-            flare_candidates = np.delete(flare_candidates, i)
-
+                                    (time_candidates >= flare_start_time))[0]
+        
+        #Cut these points from the candidates
+        time_candidates = np.delete(time_candidates, redundant_points)
+        bright_points = np.delete(bright_points, redundant_points)
+
+        #################DETERMINE IF THIS CANDIDATE IS A FLARE#################
+        
+        start_end_time(time, flux, flare_peak_time, flux_std,
+                           prim_marginal_threshold, num_below_threshold)
+        consec_points = consec_finder(time, flux, flare_peak_time, flux_std, primary_threshold,
+                           prim_marginal_threshold, num_below_threshold)
+        flare_result = declare_flare(time, flux, flare_peak_time, flux_std, primary_threshold, num_consec,
+                           prim_marginal_threshold, num_below_threshold)
+        
+        #Flare result of False means nothing was found, let's pull out the attributes
+        if flare_result != False:
+            flare_peak_times.append(flare_result[0])
+            flare_start_times.append(flare_result[1])
+            flare_end_times.append(flare_result[2])
+            flare_amps.append(flare_result[3])
+            flare_equivalent_durations.append(flare_result[4])
+            primary_or_secondary.append(flare_result[5])
+            points_in_flare.append(flare_result[6])
+            points_abv_threshold.append(flare_result[7])
+            amp_sigma.append(flare_result[8])
+
+        #if there's no flare, continue to next candidate, we already tossed the redundant points
+        if flare_result == False:
             #key point, DONT increase the index, we're tossing
             #out this data point so we want to re-evaluate the index i
-
             i = i
+            continue
+
+        print(flare_result)
+        dt = flare_times[1] - flare_times[0]
+
+        #################LEFT SEARCH FOR SECONDARIES#################
+        rise_time = time[index_start:flare_peak_index+1]
+        rise_flux = flux[index_start:flare_peak_index+1]
+        rise_flux_err = flux_err[index_start:flare_peak_index+1]
+        flare_amp = flare_result[3] #from the flare result of the primary
         
+        #If the peak is the first point in the flare, then obviously there are no
+        #secondaries to the left
+        if flare_peak_index - index_start == 0:
+            rise_residuals = np.array([0])
+
+        else:
+        #go through fitting depending on function    
+            if rise_func == 'gaussian':
+                #set weight to have to go through peak point and first point
+                sigma = rise_flux_err
+                #sigma[-1] = 0.001
+                ###FIT RISE FUNCTION###
+                rise_residuals = fit_gaussian_rise(rise_time, rise_flux, sigma, flare_peak_time, loss = loss)
+        
+        ###LOOK FOR SECONDARIES###
+        #When looking for secondaries, let's just use the median flux error as the threshold since
+        #global systematics shouldn't really change flare shape
+        rise_flux_err_med = np.nanmedian(rise_flux_err)
+        sec_results = find_secondaries(rise_residuals, rise_flux_err_med, secondary_threshold, num_consec_sec, dt,
+                      fit_multiple_secs = fit_multiple_secs)
+
+        if sec_results != False:
+            peaks, starts, ends, sec_amps, flare_EDs, flare_types, num_points, num_abv_thresh, amp_sigmas = sec_results
+            #Still need to shift the peak, start and end times to the correct times. The values above are only
+            #the indices in the residuals
+            peaks = flare_peak_index - len(rise_residuals) + peaks
+            peaks = time[peaks]
+            starts = flare_peak_index - len(rise_residuals) + starts
+            starts = time[starts]
+            ends = flare_peak_index - len(rise_residuals) + ends
+            ends = time[ends]
+
+            #Additional Detail, subtract these EDs from the primary
+            flare_equivalent_durations[-1] = flare_equivalent_durations[-1] - np.sum(flare_EDs)
+
+            #Add these flares to the total
+            flare_peak_times.extend(peaks)
+            flare_start_times.extend(starts)
+            flare_end_times.extend(ends)
+            flare_amps.extend(sec_amps)
+            flare_equivalent_durations.extend(flare_EDs)
+            primary_or_secondary.extend(flare_types)
+            points_in_flare.extend(num_points)
+            points_abv_threshold.extend(num_abv_thresh)
+            amp_sigma.extend(amp_sigmas)
+            
+
+        #################RIGHT SEARCH FOR SECONDARIES#################
+        decay_time = time[flare_peak_index:index_end+1]
+        decay_flux = flux[flare_peak_index:index_end+1]
+        decay_flux_err = flux_err[flare_peak_index:index_end+1]
+        peak_flux = flux[flare_peak_index]
+        
+        if decay_func == 'double exponential':
+            #set weight to have to go through peak point and first point
+            sigma = decay_flux_err
+            #sigma[0] = 0.001
+            #find residuals
+            decay_residuals = fit_dbl_exp_decay(decay_time, decay_flux, sigma, flare_peak_time, loss = loss)
+
+        if decay_func == 'without peak':
+            decay_residuals = fit_wo_peak(decay_time, decay_flux, decay_flux_err, flare_peak_time, loss = loss)
+
+        if decay_func == 'gompertz':
+            decay_residuals = fit_w_gompertz(decay_time, decay_flux, decay_flux_err, flare_peak_time, loss = loss)
+
+        ###LOOK FOR SECONDARIES###
+        #When looking for secondaries, let's just use the median flux error as the threshold since
+        #global systematics shouldn't really change flare shape
+        decay_flux_err_med = np.nanmedian(decay_flux_err)
+        sec_results = find_secondaries(decay_residuals, decay_flux_err_med, secondary_threshold, num_consec_sec, dt,
+                     fit_multiple_secs = fit_multiple_secs)
+
+        if sec_results != False:
+            peaks, starts, ends, sec_amps, flare_EDs, flare_types, num_points, num_abv_thresh, amp_sigmas = sec_results
+            #Still need to shift the peak, start and end times to the correct times. The values above are only
+            #the indices in the residuals
+            peaks = flare_peak_index + peaks
+            peaks = time[peaks]
+            starts = flare_peak_index + starts
+            starts = time[starts]
+            ends = flare_peak_index + ends
+            ends = time[ends]
+
+            #Additional Detail, subtract these EDs from the primary
+            #A bit tougher now, find the last thing labeled a primary
+            last_prim = [primary_or_secondary == 'primary'][-1]
+            flare_equivalent_durations[last_prim] = flare_equivalent_durations[last_prim] - np.sum(flare_EDs)
+
+            #Add these flares to the total
+            flare_peak_times.extend(peaks)
+            flare_start_times.extend(starts)
+            flare_end_times.extend(ends)
+            flare_amps.extend(sec_amps)
+            flare_equivalent_durations.extend(flare_EDs)
+            primary_or_secondary.extend(flare_types)
+            points_in_flare.extend(num_points)
+            points_abv_threshold.extend(num_abv_thresh)
+            amp_sigma.extend(amp_sigmas)
+
         #condition to break, if the next iteration will have an i that is out of
         #range of the array, we'll end the for loop
-
         if i >= (len(time_candidates)):
-
             break
 
     #convert everything to numpy array
     #as a dummy check we're not double counting anything let's use np.unique to
     #only get unique entries
-    
     flare_peak_times, unique_index = np.unique(np.array(flare_peak_times), return_index = True)
-
     flare_start_times = np.array(flare_start_times)[unique_index]
-
+    print('End Times: ', flare_end_times)
     flare_end_times = np.array(flare_end_times)[unique_index]
-
+    print('Amps: ', flare_amps)
+    print('Types: ', primary_or_secondary)
     flare_amps = np.array(flare_amps)[unique_index]
-
     flare_equivalent_durations = np.array(flare_equivalent_durations)[unique_index]
-
     primary_or_secondary = np.array(primary_or_secondary)[unique_index]
-
     points_in_flare = np.array(points_in_flare)[unique_index]
-
     points_abv_threshold = np.array(points_abv_threshold)[unique_index]
-
     amp_sigma = np.array(amp_sigma)[unique_index]
 
     return (flare_peak_times, flare_start_times, flare_end_times, flare_amps, flare_equivalent_durations,
     primary_or_secondary, points_in_flare, points_abv_threshold, amp_sigma)
 
 
-
-
 def flare_energy_calc(star_luminosity, equivalent_duration):
-
     c = 0.19 #value adopted from Petrucci etal 2024
 
     #YES, I KNOW THEY SAY IT'S 0.19 BUT THAT'S JUST NOT TRUE
     #I CHECKED THEIR NUMBERS AND C MUST BE 1. WHYYYYYYY?
-
     equivalent_duration_secs = equivalent_duration
 
     #equation used in Petrucci etal 2024
-
     flare_energy = equivalent_duration_secs * star_luminosity / c #in erg/s
-
     return flare_energy
 
+
+def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 2.0,
+                num_consec = 3, num_consec_sec = 3, loss = 'huber', fit_multiple_secs = True,
+                rise_func = None, decay_func = None,
+                prim_marginal_threshold = 3.0, num_below_threshold = 3,
+                min_break = 0.25, clip_breaks = 200, flag_values = [0],
+                primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green', cadence_color = 'black',
+                fontsize = 24, labelsize = 18):
+
+    flux_std = np.nanpercentile(flux - 1, 84)
+    mask = toffee.light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200)
+    
+    #find flares
+    flare_results = toffee.detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
+                                  secondary_threshold = secondary_threshold,
+                                  num_consec = N_1, num_consec_sec = N_2, loss = loss, rise_func = rise_func, decay_func = decay_func,
+                                  fit_multiple_secs = fit_multiple_secs, prim_marginal_threshold = prim_marginal_threshold,
+                                  num_below_threshold = num_below_threshold,
+                                  min_break = min_break, clip_breaks = clip_breaks, flag_values = flag_values)
+    #flare peak times
+    flare_peak_times = flare_results[0]
+    #flare start times
+    flare_start_times = flare_results[1]
+    #flare end times
+    flare_end_times = flare_results[2]
+    #flare amps
+    flare_amps = flare_results[3]
+    #flare eds
+    flare_eds = flare_results[4]
+    #flare type
+    flare_type = flare_results[5]
+    #number of points associated with a flare
+    num_points_in_flare = flare_results[6]
+    #number of points above with a threshold
+    num_abv_threshold = flare_results[7]
+    #sigma amplitude
+    amp_sigma = flare_results[8]
+                    
+    ###########Let's find the points belonging to the flares###########
+    
+    #For primaries
+    #array holding the times of the flare points
+    times_of_primary_flares = np.array([])
+    #array holding associated fluxes
+    fluxes_of_primary_flares = np.array([])
+    #array holding peak times
+    peak_time_of_primary = np.array([])
+    #array holding peak flux
+    peak_flux_of_primary = np.array([])
+    
+    #array holding the times of the flare points
+    times_of_secondary_flares = np.array([])
+    #array holding associated fluxes
+    fluxes_of_secondary_flares = np.array([])
+    #array holding peak times
+    peak_time_of_secondary = np.array([])
+    #array holding peak flux
+    peak_flux_of_secondary = np.array([])
+    
+    #array holding the times of the flare points
+    times_of_tertiary_flares = np.array([])
+    #array holding associated fluxes
+    fluxes_of_tertiary_flares = np.array([])
+    #array holding peak times
+    peak_time_of_tertiary = np.array([])
+    #array holding peak flux
+    peak_flux_of_tertiary = np.array([])
+    
+    #iterate through the flares and find the relevant times
+    for i in range(len(flare_start_times)):
+        start = flare_start_times[i]
+        end = flare_end_times[i]
+        #find indices of flux points between these values
+        flare_flux_points = np.where((time >= start) & (time <= end))[0]
+        #and log those times in the flare
+        flare_times = time[flare_flux_points]
+        #and log those fluxes
+        flare_fluxes = flux[flare_flux_points]
+        #find the peak flux
+        peak_flux = np.max(flare_fluxes)
+        #and associated time
+        peak_time = flare_times[np.argmax(flare_fluxes)]
+        #sort depending on type
+        if (flare_type[i] == 'primary'):  
+            #add to the list
+            times_of_primary_flares = np.append(times_of_primary_flares, flare_times)
+            fluxes_of_primary_flares = np.append(fluxes_of_primary_flares, flare_fluxes)
+            peak_flux_of_primary = np.append(peak_flux_of_primary, peak_flux)
+            peak_time_of_primary = np.append(peak_time_of_primary, peak_time)
+    
+        elif (flare_type[i] == 'secondary'):
+            #add to the list
+            times_of_secondary_flares = np.append(times_of_secondary_flares, flare_times)
+            fluxes_of_secondary_flares = np.append(fluxes_of_secondary_flares, flare_fluxes)
+            peak_flux_of_secondary = np.append(peak_flux_of_secondary, peak_flux)
+            peak_time_of_secondary = np.append(peak_time_of_secondary, peak_time)
+    
+        elif (flare_type[i] == 'tertiary'):
+            #add to the list
+            times_of_tertiary_flares = np.append(times_of_secondary_flares, flare_times)
+            fluxes_of_tertiary_flares = np.append(fluxes_of_secondary_flares, flare_fluxes)
+            peak_flux_of_tertiary = np.append(peak_flux_of_secondary, peak_flux)
+            peak_time_of_tertiary = np.append(peak_time_of_secondary, peak_time)
+    
+    #Third plot: Show the flattened lightcurve with the flares found and colored in
+    plt.figure(figsize = (10,8))
+    plt.scatter(time, flux, s = 6, color = 'gray')
+    #plot all the good flux points not masked 
+    
+    plt.scatter(time[mask], flux[mask], s = 6, color = cadence_color, label = 'Used')
+    #the plot for the residual periodogram result
+    #plt.plot(time, flatt_trend, color = 'yellow')
+    
+    #color the points around the primary flares
+    plt.scatter(times_of_primary_flares, fluxes_of_primary_flares, color = primary_color, s = 6)
+    #color the points around the secondary flares
+    plt.scatter(times_of_secondary_flares, fluxes_of_secondary_flares, color = secondary_color, s = 6, zorder = 10)
+    #color the points around the tertiary flares
+    plt.scatter(times_of_tertiary_flares, fluxes_of_tertiary_flares, color = tertiary_color, s = 6, zorder = 10)
+    
+    #add primary flare peaks
+    plt.scatter(peak_time_of_primary, peak_flux_of_primary, marker = '*', s = 200, color = primary_color)
+    #add secondary flare peaks
+    plt.scatter(peak_time_of_secondary, peak_flux_of_secondary, marker = '*', s = 200, color = secondary_color)
+    #add tertiary flare peaks
+    plt.scatter(peak_time_of_tertiary, peak_flux_of_tertiary, marker = '*', s = 200, color = tertiary_color)
+    #add three sigma line
+    plt.hlines(primary_threshold * flux_std + 1, min(time), max(time), color = tertiary_color, linewidth = 2)
+    plt.xlabel('Time (BJD)', fontsize = 24, font = 'Serif')
+    plt.ylabel(r'Normalized Flux', fontsize = 24, font = 'Serif')
+    plt.ylim(0.9, 1.25)
+    plt.tick_params(direction = 'in', labelsize = 20, width = 3, length = 10, labelfontfamily = 'Serif')
+    #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = 24)
+    plt.show()
+    
+    #################PRINT FLARE MORPHOLOGY AND FITTING#################
+    
+    for i in range(len(flare_peak_times)):
+    
+        if flare_type[i] == 'primary':
+    
+            #Unpack indices of the flare
+            #flare peak time index
+            flare_peak_index = np.where(time == flare_peak_times[i])[0][0]
+            #flare start time index
+            index_start = np.where(time == flare_start_times[i])[0][0]
+            #flare end time index
+            index_end = np.where(time == flare_end_times[i])[0][0]
+        
+            flare_peak_time = flare_peak_times[i]
+            flare_times = time[index_start:index_end]
+        
+            #Unpack flare fluxes
+            flare_peak_flux = flare_amps[i] + 1
+        
+            #################LEFT FIT#################
+            def guassian_rise(x, alpha, sigma, c):
+                #alpha, sigma, c = theta
+                return alpha * np.exp(-(x - flare_peak_time)**2 / (2 * sigma)**2) + c
+            
+            #Perform model fit
+            rise_time = time[index_start:flare_peak_index+1]
+            rise_flux = flux[index_start:flare_peak_index+1]
+            rise_flux_err = flux_err[index_start:flare_peak_index+1]
+            #set initial guesses for guassian rise
+            alpha_i = flare_peak_flux + 1
+            sigma_i = time[index_end] - time[index_start]
+            c_i = 1
+            p0_rise = [alpha_i, sigma_i, c_i]
+        
+            #set weight to have to go through peak point and first point
+            sigma = rise_flux_err
+            sigma[-1] = 0.001
+            median_rise_flux_err = np.nanmedian(rise_flux_err)
+            ####FUTURE WORK: ADDING ANY OTHER FUNCTION
+        
+            ###FIT RISE FUNCTION###
+            p_opt_rise, perr = toffee.model_fit(guassian_rise, rise_time, rise_flux, sigma, p0_rise, loss = loss)
+            flux_threshold = primary_threshold * flux_std + 1
+            
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            #plot flare points
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = primary_color, label = 'Primary Flare')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = primary_color, capsize = 3)
+            #plot gaussian fit
+            
+            plt.plot(rise_time, guassian_rise(rise_time, *p_opt_rise), label = 'Rise Fit',
+                     color = secondary_color, linewidth = 2)
+        
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                       linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (days)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+        
+            #Find the residuals
+            rise_residuals = toffee.flare_residuals(guassian_rise, rise_time, rise_flux, sigma, p0_rise, loss = loss)
+            res_points = np.arange(len(rise_residuals))
+            
+            median_flux_err = np.nanmedian(flux_err)
+            median_flux = np.nanmedian(flux)
+            threshold = secondary_threshold * median_rise_flux_err
+            
+            plt.figure(figsize = (10,8))
+            plt.scatter(res_points, rise_residuals, color = cadence_color)
+            plt.errorbar(res_points, rise_residuals, yerr = median_rise_flux_err, color = cadence_color, capsize = 4)
+            plt.hlines(threshold, res_points[0], res_points[-1],
+                      linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (Days)')
+            plt.ylabel('Residuals')
+            plt.show()
+        
+            #################RIGHT FIT#################
+            def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
+                        alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
+
+            decay_time = time[flare_peak_index:index_end+1]
+            decay_flux = flux[flare_peak_index:index_end+1]
+            decay_flux_err = flux_err[flare_peak_index:index_end+1]
+            #initial parameter guess
+            
+            #alphas should add up to flare flux
+            alpha_0_i = 0.67 * flare_peak_flux
+            alpha_1_i = 0.33 * flare_peak_flux
+            
+            #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
+            beta_0_i = 500
+            beta_1_i = 100
+            
+            C_i = 1
+            
+            p0_double = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+
+            #set weight to have to go through peak point and first point
+            sigma = decay_flux_err
+            #sigma[0] = 0.001
+    
+            ###FIT DECAY FUNCTION###
+            p_opt_decay, perr = model_fit(dbl_exp_decay, decay_time, decay_flux, sigma, p0_double, loss = loss)
+
+            flux_threshold = primary_threshold * flux_std + 1
+
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = 'black', label = 'Background Points')
+            plt.scatter(time[index_start:index_end], flux[index_start:index_end], s = 10,
+                        color = 'red', label = 'Background Points')
+            #plt.errorbar(time, normalized_flux, yerr = flux_std, linestyle = '', color = cadence_color)
+            #plot dbl exp fit
+            
+            plt.plot(decay_time,
+                     dbl_exp_decay(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
+            
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                      linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (days)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+
+            #Find the residuals
+            #decay_residuals = flare_residuals(dbl_exp_decay, decay_time, decay_flux, sigma, p0_double, loss = loss)
+            decay_residuals = fit_dbl_exp_decay(decay_time, decay_flux, sigma, flare_peak_time, loss = loss)
+            res_points = np.arange(len(decay_residuals))
+            
+            median_flux_err = np.nanmedian(flux_err)
+            median_flux = np.nanmedian(flux)
+            threshold = secondary_threshold * flux_std
+            
+            plt.figure(figsize = (10,8))
+            plt.scatter(res_points, decay_residuals, color = 'black')
+            plt.errorbar(res_points, decay_residuals, yerr = flux_std, color = 'black', capsize = 4)
+            plt.hlines(threshold, res_points[0], res_points[-1],
+                      linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (Days)')
+            plt.ylabel('Residuals')
+            plt.show()
