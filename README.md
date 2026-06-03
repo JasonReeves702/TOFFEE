@@ -28,11 +28,11 @@ For more information on running TOFFEE consult the [flare_finder manual page](ht
 
 ## How to Cite this Work
 
-If you end up using this work please be sure to cite the relevant papers describing it's creation: Pratt et al. 2025 (submitted) and Reeves et al. 2025 (submitted). As of December 2025 neither of these papers have been accepted. Be sure to check back for updates in where to find the papers when they're published.
+If you end up using this work please be sure to cite the relevant papers describing it's creation: Pratt et al. 2026 (ApJ DOI: 10.3847/1538-4357/ae5804). As of June 2026 a paper detailing TOFFEE is in prep. Be sure to check back for updates in where to find the paper when it's published.
 
 ## Issues?
 
-TOFFEE is still under development on GitHub and on PyPI. If you notice a bug or error in the code feel free to email Jason at his email: jason.reeves@tufts.edu or submit an issue on [GitHub](https://github.com/JasonReeves702/TOFFEE/issues)
+TOFFEE is still under development on GitHub and on PyPI. If you notice a bug or error in the code feel free to email Jason at his email: jreeves4@illinois.edu or submit an issue on [GitHub](https://github.com/JasonReeves702/TOFFEE/issues)
 
 ## Other Relevant Citations
 
