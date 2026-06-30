@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+from functools import reduce
 import numpy as np
 import wotan
 import matplotlib.pyplot as plt
@@ -16,6 +19,9 @@ from astroquery.mast import Catalogs
 import pandas as pd
 import os
 import requests
+from pathlib import Path
+import warnings
+import re
 from pathlib import Path
 from .get_tess_orbit import download_csv_file
 
@@ -692,7 +698,7 @@ def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0,
     residuals = flux - model_fluxes
     return residuals
 
-def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber'):
+def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None):
     #define function
     def guassian_rise(x, alpha, sigma, c):
         return alpha * np.exp(-(x - flare_peak_time)**2 / (2 * (sigma)**2)) + c
@@ -703,14 +709,18 @@ def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber'):
     c_i = 1
     p0 = [alpha_i, sigma_i, c_i]
 
-    #set weight to have to go through peak point and first point
+    #set sigma of the peak point to be super small for force fit to go through it
     sigma = flux_err
-    #sigma[-1] = 0.001
-    #fit
-    residuals = flare_residuals(guassian_rise, time, flux, sigma, p0, loss = loss)
-    return residuals
+    #sigma[-1] = sigma[-1] * 1e-3 #make super small
+    #sigma[0] = sigma[0] * 1e-3
+
+    #fit for parameters and residuals
+    params_opt, perr = model_fit(guassian_rise, time, flux, sigma, p0, loss = loss, bounds = bounds)
+    residuals = flare_residuals(guassian_rise, time, flux, sigma, p0, loss = loss, bounds = bounds)
+    return params_opt, perr, residuals
 
 
+# First, create one for double exponential decay
 def fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = (0, np.inf)):
     #define double exponential decay function for fitting
     def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
@@ -740,54 +750,9 @@ def fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', bou
     #done
     return params_opt, perr, residuals
 
-# Create routine for fitting without peak
-def fit_wo_peak(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = (0, np.inf)):
-    #begins very similar to normal double exponential decay
-    #define double exponential decay function for fitting
-    def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
-        return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
-            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
-
-    #initial parameter guess
-    #alphas should add up to flare flux
-    alpha_0_i = 0.67 * flux[0]
-    alpha_1_i = 0.33 * flux[0]
-    
-    #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
-    beta_0_i = 2000
-    beta_1_i = 5
-    C_i = 1
-    #intial guess array
-    p0 = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
-
-    # if the decay portion of the flare is really short there is no point
-    #in cutting off the first two cadences
-    if len(flux) > 3:
-        #now, cut off the first two cadences
-        flare_times = time[2:]
-        flare_flux = flux[2:]
-        flare_flux_err = flux_err[2:]
-    
-        #now fit
-        #fit for parameters and residuals
-        params_opt, perr = model_fit(dbl_exp_decay, flare_times, flare_flux, flare_flux_err, p0, loss = loss, bounds = bounds)
-        residuals = flare_residuals(dbl_exp_decay, flare_times, flare_flux, flare_flux_err, p0, loss = loss, bounds = bounds)
-    
-        #now, notice the length residual array is short of the actual fluxes in the decay by two
-        #we have no residuals for the first two cadences, we cut them out
-        #insert nan values for first two residuals to match residuals with actual times and fluxes
-        residuals = np.insert(residuals, [0, 0], np.nan)
-
-    else:
-        #fit normal double exponential decay for shorter flares
-        params_opt, perr = model_fit(dbl_exp_decay, time, flux, flux_err, p0, loss = loss, bounds = bounds)
-        residuals = flare_residuals(dbl_exp_decay, time, flux, flux_err, p0, loss = loss, bounds = bounds)
-        
-    #done
-    return params_opt, perr, residuals
 
 #create routine for fitting with product gompertz
-def fit_w_gompertz(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = (0, np.inf)):
+def fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = (0, np.inf)):
     #define the function
     def product_gompertz(x, alpha_0, beta_0, alpha_1, beta_1, C):
     #alpha_0, beta_0, alpha_1, beta_1, C = theta
@@ -818,6 +783,205 @@ def fit_w_gompertz(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds
     residuals = flare_residuals(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
     #done
     return params_opt, perr, residuals
+
+
+#################ALT GOMP: LOGISTIC DECAY########################
+
+def fit_w_gompertz_logistic(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = (0, np.inf)):
+    #define the function
+    def product_gompertz(x, A, alpha_0, beta_0, alpha_1, beta_1, C):
+        #alpha_0, beta_0, alpha_1, beta_1, C = theta
+        return (A * np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
+                           + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
+
+    #alphas should add up to flare flux
+    A_i = -10
+    alpha_0_i = -0.67 * flux[0]
+    alpha_1_i = -0.33 * flux[0]
+    
+    #betas, got no idea, but it's like in the hundreds and one of them should be much smaller
+    beta_0_i = 500
+    beta_1_i = 100
+    
+    C_i = 0
+    
+    p0_prd_gomp = [A_i, alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+
+    #set sigma of the first point to be super small for force fit to go through it
+    sigma = flux_err
+    #sigma[0] = sigma[0] * 1e-3 #make super small
+    #sigma[-1] = sigma[-1] * 1e-3
+
+    #fit for parameters and residuals
+    params_opt, perr = model_fit(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
+    residuals = flare_residuals(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
+    #done
+    return params_opt, perr, residuals
+
+#Function that calls models to run through model_fit and flare_residuals
+def call_decay_model(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None, p0 = None,
+                model = 'dbl_exp_decay', fit_peak = False):
+    
+    ##This function is essentially a bunch of check to see which model will actually be applied
+    ## And returns to appropriate residuals and ideal params for the fit
+
+    #Check if we're doing robust or super robust fitting
+    if model == 'robust':
+        params_opt, perr, residuals = robust_fitting(time, flux, flux_err, flare_peak_time, loss = loss, bounds = bounds, p0 = p0,
+                   super_robust = False, fit_peak = fit_peak)
+        return params_opt, perr, residuals
+    
+    if model == 'super_robust':
+        params_opt, perr, residuals = robust_fitting(time, flux, flux_err, flare_peak_time, loss = loss, bounds = bounds, p0 = p0,
+                   super_robust = True, fit_peak = fit_peak)
+        return params_opt, perr, residuals
+    
+    #Selection if we're just doing one fitting
+
+    #Check if we're fitting the peak at all
+    if fit_peak == False:
+        add_nan = False #initialize flag to see if we need to add nan values to resiudals
+        if len(time) > 3: #only cut if the tail is long enough
+            #trim off the first two cadences of the time, flux, flux_err
+            time, flux, flux_err = time[2:], flux[2:], flux_err[2:]
+            #Flag to see if we need to add nan values to residuals
+            add_nan = True
+
+    #Now go through the models to decide the fit
+    if model == 'dbl_exp_decay':
+        #Set recommended bounds if none are passed
+        if bounds == None:
+            bounds = (0, np.inf)
+         #fit double exponential, we only care about the residuals here
+        params_opt, perr, residuals = fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time,
+                                                                loss = loss, bounds = bounds)
+        
+    if model == 'gomp_decay':
+        #Set recommended bounds if none are passed
+        if bounds == None:
+            bounds = (0, np.inf)
+         #fit gompertz decay, we only care about the residuals here
+        params_opt, perr, residuals = fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time,
+                                                                loss = loss, bounds = bounds)
+        
+    if model == 'gomp_logistic':
+        #Set recommended bounds if none are passed
+        if bounds == None:
+            bounds = (-np.inf, np.inf)
+         #fit gompertz decay, we only care about the residuals here
+        params_opt, perr, residuals = fit_w_gompertz_logistic(time, flux, flux_err, flare_peak_time,
+                                                                loss = loss, bounds = bounds)
+        
+    #Custom routine for new models if desired, pass the name of the func for the decay
+    #BOUNDS AND P0 CANNOT BE NONE VALUE, THEY MUST BE PASSED FOR LEAST SQUARES TO RUN  
+    if type(model) != str:
+        #shift the times to be centered around zero for easy fitting
+        time = time - flare_peak_time
+        #fit the function to get ideal params and residuals
+        params_opt, perr = model_fit(model, time, flux, flux_err, p0, loss = loss, bounds = bounds)
+        residuals = flare_residuals(model, time, flux, flux_err, p0, loss = loss, bounds = bounds)
+        #shift the times back the real times
+        time = time + flare_peak_time
+
+    #Check later if we fit without the peak to inser np.nan into the first two indices of the residuals
+    if fit_peak == False:
+        if add_nan == True:
+            #now, notice the length residual array is short of the actual fluxes in the decay by two
+            #we have no residuals for the first two cadences, we cut them out
+            #insert nan values for first two residuals to match residuals with actual times and fluxes
+            residuals = np.insert(residuals, [0, 0], np.nan)
+
+    return params_opt, perr, residuals
+
+#Special Routines for super robust fitting which fits four functions. Created for streamlined approach to later function
+def super_fitting(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None, p0 = None):
+    #Fit both gompertz decay and double exponential decay with the full deacy
+    
+    #Set recommended bounds if none are passed
+    if bounds == None:
+        bounds = (0, np.inf)
+        #fit double exponential, we only care about the residuals here
+    params_opt_exp, perr_exp, residuals_exp = fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time,
+                                                            loss = loss, bounds = bounds)
+    #fit gompertz decay, we only care about the residuals here
+    params_opt_gomp, perr_gomp, residuals_gomp = fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time,
+                                                            loss = loss, bounds = bounds)
+    #combine the results
+    params_opt, perr, residuals = (np.array([params_opt_exp, params_opt_gomp]),
+                                    np.array([perr_exp, perr_gomp]),
+                                    np.array([residuals_exp, residuals_gomp]))
+
+    #Fit without the peak
+    #If the flare is short there's no point and we'll just return the full residuals as above
+    if len(time) <= 3:
+        return params_opt, perr, residuals
+
+    #If long enough, trim off the first two cadences of the time, flux, flux_err
+    time, flux, flux_err = time[2:], flux[2:], flux_err[2:]
+    #fir again, without the peaks this time
+    params_opt_exp_wo_peak, perr_exp_wo_peak, residuals_exp_wo_peak = fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time,
+                                                            loss = loss, bounds = bounds)
+    #insert nan values for the first two indices to match length of fitting with peak
+    residuals_exp_wo_peak = np.insert(residuals_exp_wo_peak, [0, 0], np.nan)
+
+    #fit gompertz decay, we only care about the residuals here
+    params_opt_gomp_wo_peak, perr_gomp_wo_peak, residuals_gomp_wo_peak = fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time,
+                                                            loss = loss, bounds = bounds)
+    #insert nan values for the first two indices to match length of fitting with peak
+    residuals_gomp_wo_peak = np.insert(residuals_gomp_wo_peak, [0, 0], np.nan)
+    
+    #combine the results
+    params_opt, perr, residuals = (np.array([params_opt_exp, params_opt_gomp, params_opt_exp_wo_peak, params_opt_gomp_wo_peak]),
+                                    np.array([perr_exp, perr_gomp, perr_exp_wo_peak, perr_gomp_wo_peak]),
+                                    np.array([residuals_exp, residuals_gomp, residuals_exp_wo_peak, residuals_gomp_wo_peak]),)
+    
+    return params_opt, perr, residuals
+    
+
+#Special Routines for robust fitting which fits multiple functions
+def robust_fitting(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None, p0 = None,
+                   super_robust = False, fit_peak = False):
+    #This function fits multiple functions and returns all their residuals and ideal
+    #params for fitting
+
+    #Check whether we're doing super fitting and fitting gompertz decay and double exponential
+    #both with and without the peaks. Four total fittings
+    if super_robust == True:
+        params_opt, perr, residuals = super_fitting(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None, p0 = None)
+        return params_opt, perr, residuals
+    
+    #second, check if we're fitting the peak at all
+    if fit_peak == False:
+        add_nan = False #initialize flag to see if we need to add nan values to resiudals
+        if len(time) > 3: #only cut if the tail is long enough
+            #trim off the first two cadences of the time, flux, flux_err
+            time, flux, flux_err = time[2:], flux[2:], flux_err[2:]
+            #Flag to see if we need to add nan values to residuals
+            add_nan = True
+
+    #Set recommended bounds if none are passed
+    if bounds == None:
+        bounds = (0, np.inf)
+        #fit double exponential, we only care about the residuals here
+    params_opt_exp, perr_exp, residuals_exp = fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time,
+                                                            loss = loss, bounds = bounds)
+    #fit gompertz decay, we only care about the residuals here
+    params_opt_gomp, perr_gomp, residuals_gomp = fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time,
+                                                            loss = loss, bounds = bounds)
+    #combine the results
+    params_opt, perr, residuals = (np.array([params_opt_exp, params_opt_gomp]),
+                                   np.array([perr_exp, perr_gomp]),
+                                   np.array([residuals_exp, residuals_gomp]))
+
+    #Check if we fit without the peak to inser np.nan into the first two indices of the residuals
+    if fit_peak == False:
+        if add_nan == True:
+            #insert nan values for first two residuals to match residuals with actual times and fluxes
+            #for this we need to create two dimensional array of nans to add to the left of the residuals
+            nans = np.full((residuals.shape[0], 2), np.nan)
+            residuals = np.hstack([nans, residuals])
+
+    return params_opt, perr, residuals
     
 
 #Look through the residuals
@@ -831,8 +995,20 @@ def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, d
     dt = difference in time coordinates, set by the cadence
     '''
 
-    #Find points above the threshold
-    bright_res = np.where(residuals > secondary_threshold * flux_std)[0]
+    if len(residuals.shape) == 1: #if the array is just one dimensional
+        #Find points above the threshold
+        bright_res = np.where(residuals > secondary_threshold * flux_std)[0]
+
+    #If we're comparing the fits from multiple models we'll have multiple residuals
+    #We need to find the bright residuals for each and find the common values where
+    #all fits agree
+    else:
+        indices = [np.where(row > secondary_threshold * flux_std)[0].tolist() for row in residuals]
+        #Bright points indices found for all fits
+        bright_res = reduce(np.intersect1d, indices)
+        #We need to reduce the residuals down to one list of values
+        #We'll take the averages of the values
+        residuals = np.mean(residuals, axis = 0)
 
     #Split this array into the individual bright epochs of consecutive points
     res_splits = np.split(bright_res, np.where(np.diff(bright_res) != 1)[0] + 1)
@@ -895,12 +1071,14 @@ def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, d
         return False
         
 
-def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 2.0,
+def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 3.0,
                   num_consec = 3, num_consec_sec = 3, loss = 'huber',
-                  rise_bounds = None, decay_bounds = (0, np.inf), fit_multiple_secs = True,
-                  rise_func = 'gaussian', decay_func = 'double exponential',
+                  rise_bounds = None, rise_func = 'gaussian',
+                  decay_func = 'dbl_exp_decay', fit_peak = False, p0_decay = None, decay_bounds = None,
+                  fit_multiple_secs = True,
                   prim_marginal_threshold = 3.0, num_below_threshold = 3,
                   min_break = 0.25, clip_breaks = 200, flag_values = [0]):
+    
     # Yes, it's a lot of inputs, but most of them are defaulted to pretty good values. I'd recommend only toying
     #With primary_threshold, secondary_threshold, num_consec, & num_consec_sec. 
     #You can also change flag values to [0,512] which isn't a bad idea
@@ -930,9 +1108,14 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
     FLARE MODELING:
     rise_func: function to model the rise portion of a flare.
                Default value corresponds to default use of gaussian rise.
+    rise_bounds: Bounds for the chosen rise function. Use 2-tuple bounds object or array like with shape consistent
+                 with the number of free parameters in the function chosen.
     decay_func: function to model the decay portion of a flare.
                Default value corresponds to default use of double exponential decay on full decay.
-               Other elligible values are "without peak" and "gompertz"
+               Other elligible values are "without peak", "gompertz", and "robust".
+    decay_bounds: Bounds for the chosen rise function. Use 2-tuple bounds object or array like with shape consistent
+                  with the number of free parameters in the function chosen. Default ensures all the values are positive
+                  but None can also be set if no bounds are desired.
 
     SETTING BEGINNING AND END TIMES OF FLARES:
     prim_marginal_threshold: Sets the threshold to consider the start and end of a flare. A default value of 3 corresponds
@@ -1064,7 +1247,7 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
             i = i
             continue
 
-        print(flare_result)
+        #print(flare_result)
         dt = flare_times[1] - flare_times[0]
 
         #################LEFT SEARCH FOR SECONDARIES#################
@@ -1084,6 +1267,7 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
                 #fit gaussian, we only care about the residuals here
                 params_opt, perr, rise_residuals = fit_gaussian_rise(rise_time, rise_flux, rise_flux_err,
                                                                      flare_peak_time, loss = loss, bounds = rise_bounds)
+        
         
         ###LOOK FOR SECONDARIES###
         #When looking for secondaries, let's just use the median flux error as the threshold since
@@ -1123,34 +1307,12 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
         decay_flux = flux[flare_peak_index:index_end+1]
         decay_flux_err = flux_err[flare_peak_index:index_end+1]
         peak_flux = flux[flare_peak_index]
-        
-        if decay_func == 'double exponential':
-            #fit double exponential, we only care about the residuals here
-            params_opt, perr, decay_residuals = fit_dbl_exp_decay(decay_time, decay_flux, decay_flux_err, flare_peak_time,
-                                                                  loss = loss, bounds = decay_bounds)
 
-        if decay_func == 'without peak':
-            #fit double exponential with no peak, we only care about the residuals here
-            params_opt, perr, decay_residuals = fit_wo_peak(decay_time, decay_flux, decay_flux_err, flare_peak_time,
-                                                            loss = loss, bounds = decay_bounds)
-
-        if decay_func == 'gompertz':
-            #fit product gompertz, we only care about the residuals here
-            params_opt, perr, decay_residuals = fit_w_gompertz(decay_time, decay_flux, decay_flux_err, flare_peak_time,
-                                                               loss = loss, bounds = decay_bounds)
-
-        if decay_func == 'robust':
-            #######################################################################################
-            #######################################################################################
-            #######################################################################################
-            ####################FUTURE WORK: MAKE MULTIPLE FITS FOR ALL FUNCTIONS:#################
-            #######FOR RIGHT NOW I'M JUST USING GOMPERTZ GIT TO GENERATE SECONDARIES###############
-            #######################################################################################
-            #######################################################################################
-            #######################################################################################
-
-            params_opt, perr, decay_residuals = fit_w_gompertz(decay_time, decay_flux, decay_flux_err, flare_peak_time,
-                                                               loss = loss, bounds = decay_bounds)
+        #Perform the fitting and get the residuals for the default model of the flare decay
+            
+        params_opt, perr, decay_residuals = call_decay_model(decay_time, decay_flux, decay_flux_err, flare_peak_time,
+                                                              loss = loss, bounds = decay_bounds, p0 = p0_decay,
+                                                              model = decay_func, fit_peak = fit_peak)
 
         ###LOOK FOR SECONDARIES###
         #When looking for secondaries, let's just use the median flux error as the threshold since
@@ -1196,10 +1358,10 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
     #only get unique entries
     flare_peak_times, unique_index = np.unique(np.array(flare_peak_times), return_index = True)
     flare_start_times = np.array(flare_start_times)[unique_index]
-    print('End Times: ', flare_end_times)
+    #print('End Times: ', flare_end_times)
     flare_end_times = np.array(flare_end_times)[unique_index]
-    print('Amps: ', flare_amps)
-    print('Types: ', primary_or_secondary)
+    #print('Amps: ', flare_amps)
+    #print('Types: ', primary_or_secondary)
     flare_amps = np.array(flare_amps)[unique_index]
     flare_equivalent_durations = np.array(flare_equivalent_durations)[unique_index]
     primary_or_secondary = np.array(primary_or_secondary)[unique_index]
@@ -1223,14 +1385,15 @@ def flare_energy_calc(star_luminosity, equivalent_duration):
     return flare_energy
 
 
-def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 2.0,
-                num_consec = 3, num_consec_sec = 3, loss = 'huber',
-                rise_bounds = None, decay_bounds = (0, np.inf), fit_multiple_secs = True,
-                rise_func = 'gaussian', decay_func = 'double exponential',
-                prim_marginal_threshold = 3.0, num_below_threshold = 3,
-                min_break = 0.25, clip_breaks = 200, flag_values = [0],
-                primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green', cadence_color = 'black',
-                fontsize = 24, labelsize = 18):
+def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 3.0,
+               num_consec = 3, num_consec_sec = 3, loss = 'huber',
+               rise_bounds = None, rise_func = 'gaussian',
+               decay_func = 'dbl_exp_decay', fit_peak = False, p0_decay = None, decay_bounds = None,
+               fit_multiple_secs = True,
+               prim_marginal_threshold = 3.0, num_below_threshold = 3,
+               min_break = 0.25, clip_breaks = 200, flag_values = [0],
+               primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green', cadence_color = 'black',
+               fontsize = 24, labelsize = 18, Target = None, Sector = None):
 
     #run the flattening curve to see if something else can break the LS test
     t, lc_quad, lc_wotan, lc_flat, periodic = flatten(time, flux, flux_err, plot_results=False,
@@ -1257,12 +1420,14 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
     #find flares
     flare_results = detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
                                   secondary_threshold = secondary_threshold,
-                                  num_consec = N_1, num_consec_sec = N_2, loss = loss,
-                                  rise_bounds = rise_bounds, decay_bounds = decay_bounds,
-                                  rise_func = rise_func, decay_func = decay_func,
-                                  fit_multiple_secs = fit_multiple_secs, prim_marginal_threshold = prim_marginal_threshold,
+                                  num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                                  rise_bounds = rise_bounds, rise_func = rise_func,
+                                  decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay, decay_bounds = decay_bounds,
+                                  fit_multiple_secs = fit_multiple_secs,
+                                  prim_marginal_threshold = prim_marginal_threshold,
                                   num_below_threshold = num_below_threshold,
                                   min_break = min_break, clip_breaks = clip_breaks, flag_values = flag_values)
+
     
     #flare peak times
     flare_peak_times = flare_results[0]
@@ -1349,7 +1514,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             peak_flux_of_tertiary = np.append(peak_flux_of_tertiary, peak_flux)
             peak_time_of_tertiary = np.append(peak_time_of_tertiary, peak_time)
     
-    #Third plot: Show the flattened lightcurve with the flares found and colored in
+    #First plot: Show the flattened lightcurve with the flares found and colored in
     plt.figure(figsize = (10,8))
     plt.scatter(time, flux, s = 6, color = 'gray')
     #plot all the good flux points not masked 
@@ -1435,7 +1600,14 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                        linewidth = 3, linestyle = '--', color = 'gray')
             plt.xlabel('Time (BJD)', fontsize = fontsize)
             plt.ylabel('Detrended flux', fontsize = fontsize)
-            #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+            
             plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
             plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
             plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
@@ -1463,63 +1635,42 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             decay_time = time[flare_peak_index:index_end+1]
             decay_flux = flux[flare_peak_index:index_end+1]
             decay_flux_err = flux_err[flare_peak_index:index_end+1]
+
+            def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
+                        alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
+            def gompertz_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
+                                + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
+            def gompertz_logistic(x, A, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (A * np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
+                                + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
             
             #figure out which function to plot
-
-            ##############DOUBLE EXPONENTIAL################
-            if decay_func == 'double exponential':
-                def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
-                    #alpha_0, beta_0, alpha_1, beta_1, C = theta
-                    return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
-                            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
-                #fit double exponential to the decay, get parameters and residuals
-                p_opt_decay, perr, decay_residuals = fit_dbl_exp_decay(decay_time, decay_flux, decay_flux_err,
-                                                                     flare_peak_time, loss = loss, bounds = decay_bounds)
-            ###########DOUBLE EXPONENTIAL WITHOUT THE PEAK#############
-            if decay_func == 'without peak':
-                def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
-                    #alpha_0, beta_0, alpha_1, beta_1, C = theta
-                    return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
-                            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
-                #fit double exponential to the decay, get parameters and residuals
-                p_opt_decay, perr, decay_residuals = fit_wo_peak(decay_time, decay_flux, decay_flux_err,
-                                                                flare_peak_time, loss = loss, bounds = decay_bounds)
-            ###########PRODUCT GOMPERTZ##########
-            if decay_func == 'gompertz':
-                def product_gompertz(x, alpha_0, beta_0, alpha_1, beta_1, C):
-                    #alpha_0, beta_0, alpha_1, beta_1, C = theta
-                    return (np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
-                                   + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
-                #fit product gompertz to the decay, get parameters and residuals
-                p_opt_decay, perr, decay_residuals = fit_w_gompertz(decay_time, decay_flux, decay_flux_err,
-                                                                  flare_peak_time, loss = loss, bounds = decay_bounds)
-
-            ###########ROBUST: ALL THREE##########
+            p_opt_decay, perr, decay_residuals = call_decay_model(decay_time, decay_flux, decay_flux_err, flare_peak_time,
+                                                              loss = loss, bounds = decay_bounds, p0 = p0_decay,
+                                                              model = decay_func, fit_peak = fit_peak)
+            
+            ###########ROBUST FITTING###########
             if decay_func == 'robust':
-                def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
-                    #alpha_0, beta_0, alpha_1, beta_1, C = theta
-                    return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
-                            alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
-                def product_gompertz(x, alpha_0, beta_0, alpha_1, beta_1, C):
-                    #alpha_0, beta_0, alpha_1, beta_1, C = theta
-                    return (np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
-                                   + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
-
-
-                ################################################################################################
-                ################################################################################################
-                ################################ISSSUES################################
-                #FIX BOUNDS ISSUE FOR USING ALL THREE MODELSSSSS
-
                 ####Fit regular double exponential decay###
-                p_opt_dbl_exp, perr, dbl_exp_residuals = fit_dbl_exp_decay(decay_time, decay_flux, decay_flux_err,
-                                                                flare_peak_time, loss = loss, bounds = decay_bounds)
-                ####Fit double exponential decay without the peak flux###
-                p_opt_wo_peak, perr, wo_peak_residuals = fit_wo_peak(decay_time, decay_flux, decay_flux_err,
-                                                                flare_peak_time, loss = loss, bounds = decay_bounds)
+                p_opt_dbl_exp, perr, dbl_exp_residuals = p_opt_decay[0], perr[0], decay_residuals[0]
                 ####Fit product gompertz###
-                p_opt_gompertz, perr, gompertz_residuals = fit_w_gompertz(decay_time, decay_flux, decay_flux_err,
-                                                                  flare_peak_time, loss = loss, bounds = decay_bounds)
+                p_opt_gompertz, perr, gompertz_residuals = p_opt_decay[1], perr[1], decay_residuals[1]
+                
+            if decay_func == 'super_robust':
+                ####Fit regular double exponential decay###
+                p_opt_dbl_exp, perr_dbl_exp, dbl_exp_residuals = p_opt_decay[0], perr[0], decay_residuals[0]
+                ####Fit product gompertz###
+                p_opt_gompertz, perr_gomp, gompertz_residuals = p_opt_decay[1], perr[1], decay_residuals[1]
+                if len(p_opt_decay) > 2: #for short flares we didn't do the fitting without the peaks
+                    ####Fit dbl exponential w/o peak#
+                    p_opt_dbl_exp_wo_peak, perr_dbl_exp_wo_peak, dbl_exp_residuals_wo_peak =  p_opt_decay[2], perr[2], decay_residuals[2]
+                    ####Fit product gompertz w/o peak#
+                    p_opt_gompertz_wo_peak, perr_gomp_wo_peak, gompertz_residuals_wo_peak = p_opt_decay[3], perr[3], decay_residuals[3]
             
             #Set threshold for plotting
             flux_threshold = primary_threshold * flux_std + 1
@@ -1534,17 +1685,17 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                          yerr = flux_err[index_start:index_end+1], linestyle = '', color = primary_color, capsize = 3)
             
             #plot the decay fit
-            if decay_func == 'double exponential':
+            if decay_func == 'dbl_exp_decay':
                 plt.plot(decay_time,
                      dbl_exp_decay(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
 
-            if decay_func == 'without peak':
+            if decay_func == 'gomp_decay':
                 plt.plot(decay_time,
-                     dbl_exp_decay(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
-
-            if decay_func == 'gompertz':
+                     gompertz_decay(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
+                
+            if decay_func == 'gomp_logistic':
                 plt.plot(decay_time,
-                     product_gompertz(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
+                     gompertz_logistic(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
 
             #plotting all three
             if decay_func == 'robust':
@@ -1552,18 +1703,38 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                      dbl_exp_decay(decay_time, *p_opt_dbl_exp), label = 'Double Exp',
                          linewidth = 2, color = 'black', linestyle = '-')
                 plt.plot(decay_time,
-                     dbl_exp_decay(decay_time, *p_opt_wo_peak), label = 'Double Exp w/o Peak',
-                         linewidth = 2, color = 'blue', linestyle = '--')
-                plt.plot(decay_time,
-                     product_gompertz(decay_time, *p_opt_gompertz), label = 'Product Gompertz',
+                     gompertz_decay(decay_time, *p_opt_gompertz), label = 'Product Gompertz',
                          linewidth = 2, color = 'green', linestyle = '-.')
+                
+            #plotting all three
+            if decay_func == 'super_robust':
+                plt.plot(decay_time,
+                     dbl_exp_decay(decay_time, *p_opt_dbl_exp), label = 'Double Exp',
+                         linewidth = 2, color = 'black', linestyle = '-')
+                plt.plot(decay_time,
+                     gompertz_decay(decay_time, *p_opt_gompertz), label = 'Product Gompertz',
+                         linewidth = 2, color = 'green', linestyle = '-.')
+                if len(p_opt_decay) > 2:
+                    plt.plot(decay_time,
+                        dbl_exp_decay(decay_time, *p_opt_dbl_exp_wo_peak), label = 'Double Exp w/o Peak',
+                            linewidth = 2, color = 'blue', linestyle = '--')
+                    plt.plot(decay_time,
+                        gompertz_decay(decay_time, *p_opt_gompertz_wo_peak), label = 'Product Gompertz w/o Peak',
+                            linewidth = 2, color = 'red', linestyle = ':')
                 
             
             plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
                       linewidth = 3, linestyle = '--', color = 'gray')
             plt.xlabel('Time (days)', fontsize = fontsize)
             plt.ylabel('Detrended flux', fontsize = fontsize)
-            plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+            
             plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
             plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
             plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
@@ -1576,7 +1747,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             
             median_flux_err = np.nanmedian(flux_err)
             median_flux = np.nanmedian(flux)
-            threshold = secondary_threshold * flux_std
+            threshold = secondary_threshold * median_flux_err
             
             plt.figure(figsize = (10,8))
 
@@ -1584,24 +1755,129 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             if decay_func == 'robust':
                 #plot residuals from double exponential decay
                 plt.scatter(decay_time, dbl_exp_residuals, color = 'black')
-                plt.errorbar(decay_time, dbl_exp_residuals, yerr = flux_std,
+                plt.errorbar(decay_time, dbl_exp_residuals, yerr = median_flux_err,
                              color = 'black', capsize = 4, linestyle = '-', label = 'Double Exp')
-                #plot residuals from double exponential decay without the peak
-                plt.scatter(decay_time, wo_peak_residuals, color = 'blue')
-                plt.errorbar(decay_time, wo_peak_residuals, yerr = flux_std,
-                             color = 'blue', capsize = 4, linestyle = '--', label = 'Double Exp w/o Peak')
                 #plot residuals from product gompertz decay without the peak
                 plt.scatter(decay_time, gompertz_residuals, color = 'green')
-                plt.errorbar(decay_time, gompertz_residuals, yerr = flux_std,
+                plt.errorbar(decay_time, gompertz_residuals, yerr = median_flux_err,
                              color = 'green', capsize = 4, linestyle = '-.', label = 'Product Gompertz')
+                
+            elif decay_func == 'super_robust':
+                #plot residuals from double exponential decay
+                plt.scatter(decay_time, dbl_exp_residuals, color = 'black')
+                plt.errorbar(decay_time, dbl_exp_residuals, yerr = median_flux_err,
+                             color = 'black', capsize = 4, linestyle = '-', label = 'Double Exp')
+                #plot residuals from product gompertz decay without the peak
+                plt.scatter(decay_time, gompertz_residuals, color = 'green')
+                plt.errorbar(decay_time, gompertz_residuals, yerr = median_flux_err,
+                             color = 'green', capsize = 4, linestyle = '-.', label = 'Product Gompertz')
+                if len(p_opt_decay) > 2:
+                    #plot residuals from double exponential decay w/o the peak
+                    plt.scatter(decay_time, dbl_exp_residuals_wo_peak, color = 'blue')
+                    plt.errorbar(decay_time, dbl_exp_residuals_wo_peak, yerr = median_flux_err,
+                                color = 'blue', capsize = 4, linestyle = '--', label = 'Double Exp w/o Peak')
+                    #plot residuals from product gompertz decay without the peak
+                    plt.scatter(decay_time, gompertz_residuals_wo_peak, color = 'red')
+                    plt.errorbar(decay_time, gompertz_residuals_wo_peak, yerr = median_flux_err,
+                                color = 'red', capsize = 4, linestyle = ':', label = 'Product Gompertz w/o Peak')
                 
             else:
                 plt.scatter(decay_time, decay_residuals, color = cadence_color)
-                plt.errorbar(decay_time, decay_residuals, yerr = flux_std, color = cadence_color, capsize = 4)
+                plt.errorbar(decay_time, decay_residuals, yerr = median_flux_err, color = cadence_color, capsize = 4)
             
             plt.hlines(threshold, decay_time[0], decay_time[-1],
                       linewidth = 3, linestyle = '--', color = 'gray')
             plt.xlabel('Time (BJD)', fontsize = fontsize)
             plt.ylabel('Residuals', fontsize = fontsize)
             plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.show()
+
+            #Now plot the secondaries in the time series if they were found
+        if flare_type[i] == 'secondary':
+    
+            #Unpack indices of the flare
+            #flare peak time index
+            flare_peak_index = np.where(time == flare_peak_times[i])[0][0]
+            #flare start time index
+            index_start = np.where(time == flare_start_times[i])[0][0]
+            #flare end time index
+            index_end = np.where(time == flare_end_times[i])[0][0]
+        
+            flare_peak_time = flare_peak_times[i]
+            flare_times = time[index_start:index_end]
+        
+            #Unpack flare fluxes
+            flare_peak_flux = flux[np.where(time == flare_peak_time)[0]]
+    
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            #plot flare points
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = secondary_color, label = 'Secondary Flare')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = secondary_color, capsize = 3)
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                       linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+        
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+
+        if flare_type[i] == 'tertiary':
+    
+            #Unpack indices of the flare
+            #flare peak time index
+            flare_peak_index = np.where(time == flare_peak_times[i])[0][0]
+            #flare start time index
+            index_start = np.where(time == flare_start_times[i])[0][0]
+            #flare end time index
+            index_end = np.where(time == flare_end_times[i])[0][0]
+        
+            flare_peak_time = flare_peak_times[i]
+            flare_times = time[index_start:index_end]
+        
+            #Unpack flare fluxes
+            flare_peak_flux = flux[np.where(time == flare_peak_time)[0]]
+    
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            #plot flare points
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = tertiary_color, label = 'Tertiary Flare')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = tertiary_color, capsize = 3)
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                       linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
             plt.show()
