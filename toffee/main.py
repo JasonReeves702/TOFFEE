@@ -1035,7 +1035,11 @@ def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, d
             flare_ends.append(max(epoch))
             #But we can find the non-time related quantities easily!
             flare_amps.append(max(residuals[epoch]))
-            flare_EDs.append(np.trapz(residuals[epoch], x = np.arange(0, len(epoch) * dt, dt)))
+            flare_ED = np.trapz(residuals[epoch], x = np.arange(0, len(epoch) * dt, dt))
+            #covert to seconds
+            days_to_seconds = 86400
+            flare_ED = flare_ED * 86400
+            flare_EDs.append(flare_ED)
             if secondary == True: #if we've previously found a secondary this must be a higher order flare
                 flare_types.append('tertiary')
             else:
@@ -1052,15 +1056,15 @@ def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, d
             #Find which flare had the largest amplitude
             biggest_sec = np.argmax(flare_amps)
             #Only keep the flare signature from this flare
-            flare_peaks = flare_peaks[biggest_sec]
-            flare_starts = flare_starts[biggest_sec]
-            flare_ends = flare_ends[biggest_sec]
-            flare_amps = flare_amps[biggest_sec]
-            flare_EDs = flare_EDs[biggest_sec]
-            flare_types = 'secondary'
-            num_points = num_points[biggest_sec]
-            num_abv_threshold = num_abv_threshold[biggest_sec]
-            amp_sigmas = amp_sigmas[biggest_sec]
+            flare_peaks = [flare_peaks[biggest_sec]]
+            flare_starts = [flare_starts[biggest_sec]]
+            flare_ends = [flare_ends[biggest_sec]]
+            flare_amps = [flare_amps[biggest_sec]]
+            flare_EDs = [flare_EDs[biggest_sec]]
+            flare_types = ['secondary']
+            num_points = [num_points[biggest_sec]]
+            num_abv_threshold = [num_abv_threshold[biggest_sec]]
+            amp_sigmas = [amp_sigmas[biggest_sec]]
             
     #if there was a flare return it's attributes
     if secondary == True:
@@ -1326,17 +1330,17 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
             #Still need to shift the peak, start and end times to the correct times. The values above are only
             #the indices in the residuals
             peaks = flare_peak_index + peaks
-            peaks = time[peaks]
+            peaks =  time[peaks]
             starts = flare_peak_index + starts
             starts = time[starts]
             ends = flare_peak_index + ends
             ends = time[ends]
-
+    
             #Additional Detail, subtract these EDs from the primary
             #A bit tougher now, find the last thing labeled a primary
             last_prim = [primary_or_secondary == 'primary'][-1]
             flare_equivalent_durations[last_prim] = flare_equivalent_durations[last_prim] - np.sum(flare_EDs)
-
+    
             #Add these flares to the total
             flare_peak_times.extend(peaks)
             flare_start_times.extend(starts)
@@ -1395,26 +1399,6 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green', cadence_color = 'black',
                fontsize = 24, labelsize = 18, Target = None, Sector = None):
 
-    #run the flattening curve to see if something else can break the LS test
-    t, lc_quad, lc_wotan, lc_flat, periodic = flatten(time, flux, flux_err, plot_results=False,
-                                                short_window=0.25, periodogram = [0.1, 10])
-
-    if type(t) == str:
-        #we have some problematic sector
-        #broken_sectors.append(str(TIC_number) + '_' + str(TESS_sector))
-        return 'Broken!'
-
-
-    #or if the fit didn't converge it was returned as false
-    if type(t) == bool:
-        #we have some problematic sector
-        #broken_sectors.append(str(TIC_number) + '_' + str(TESS_sector))
-        return 'RunTime Error!'
-
-    time, flux, flux_err = t, lc_flat[0], lc_flat[1]
-    flux_std = np.nanpercentile(flux - 1, 84)
-    quality = np.zeros_like(time)
-
     mask = light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200)
     
     #find flares
@@ -1427,7 +1411,6 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                                   prim_marginal_threshold = prim_marginal_threshold,
                                   num_below_threshold = num_below_threshold,
                                   min_break = min_break, clip_breaks = clip_breaks, flag_values = flag_values)
-
     
     #flare peak times
     flare_peak_times = flare_results[0]
