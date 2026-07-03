@@ -698,6 +698,36 @@ def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0,
     residuals = flux - model_fluxes
     return residuals
 
+#Function to adjust the initial guesses of a fit if they're not
+#in the bounds
+def adjust_bounds(p_0, bounds):
+    lower_bounds = bounds[0]
+    upper_bounds = bounds[1]
+    
+    #check the bounds are above the lower bounds and below the upper bound
+    above_lower = np.all((p_0 >= lower_bounds))
+    below_upper = np.all((p_0 <= upper_bounds))
+    
+    if above_lower == False: #if there's an error
+        if type(lower_bounds) != list: #if there's just broad error, not itemized by input
+            bounds_mask = p_0 < lower_bounds #True values correspond to problematic values
+            p_0[bounds_mask] = lower_bounds + 1 #adjust values to be above minimum
+        else: #for list of lower bounds
+            for i in range(len(p_0)): #iterate through bounds and adjust them
+                if p_0[i] < lower_bounds[i]: #if the initial guess is too small
+                    p_0[i] = lower_bounds[i] + 1 #adjust it to be greater than lower bound
+    
+    if below_upper == False: #if there's an error
+        if type(upper_bounds) != list: #if there's just broad error, not itemized by input
+            bounds_mask = p_0 > upper_bounds #True values correspond to problematic values
+            p_0[bounds_mask] = upper_bounds - 1 #adjust values to be below maximum
+        else: #for list of lower bounds
+            for i in range(len(p_0)): #iterate through bounds and adjust them
+                if p_0[i] > upper_bounds[i]: #if the initial guess is too big
+                    p_0[i] = upper_bounds[i] - 1 #adjust it to be less than than upper bound
+    return p_0
+
+
 def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None):
     #define function
     def guassian_rise(x, alpha, sigma, c):
@@ -707,7 +737,12 @@ def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber', bou
     alpha_i = flux[-1]
     sigma_i = (time[-1] - time[0])/2
     c_i = 1
-    p0 = [alpha_i, sigma_i, c_i]
+    
+    p0 = np.array([alpha_i, sigma_i, c_i])
+
+    #Check these initial guesses are within the bounds of fitting
+    if bounds != None:
+        p0 = adjust_bounds(p0, bounds)
 
     #set sigma of the peak point to be super small for force fit to go through it
     sigma = flux_err
@@ -737,7 +772,12 @@ def fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', bou
     beta_1_i = 5
     C_i = 1
     #intial guess array
-    p0 = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+    p0 = np.array([alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i])
+
+    #we need a dummy check to make sure the initial guesses are within the set
+    #bounds if we have any
+    if bounds != None:
+        p0 = adjust_bounds(p0, bounds)
 
     #set sigma of the first point to be super small for force fit to go through it
     sigma = flux_err
@@ -771,7 +811,12 @@ def fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', 
     
     C_i = 0
     
-    p0_prd_gomp = [alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+    p0_prd_gomp = np.array([alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i])
+
+    #Check these initial guesses are within the bounds of fitting
+    if bounds != None:
+        p0_prd_gomp = adjust_bounds(p0_prd_gomp, bounds)
+    
 
     #set sigma of the first point to be super small for force fit to go through it
     sigma = flux_err
@@ -805,7 +850,11 @@ def fit_w_gompertz_logistic(time, flux, flux_err, flare_peak_time, loss = 'huber
     
     C_i = 0
     
-    p0_prd_gomp = [A_i, alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i]
+    p0_prd_gomp = np.array([A_i, alpha_0_i, beta_0_i, alpha_1_i, beta_1_i, C_i])
+
+    #Check these initial guesses are within the bounds of fitting
+    if bounds != None:
+        p0_prd_gomp = adjust_bounds(p0_prd_gomp, bounds)
 
     #set sigma of the first point to be super small for force fit to go through it
     sigma = flux_err
