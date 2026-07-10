@@ -1422,8 +1422,22 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
     points_abv_threshold = np.array(points_abv_threshold)[unique_index]
     amp_sigma = np.array(amp_sigma)[unique_index]
 
-    return (flare_peak_times, flare_start_times, flare_end_times, flare_amps, flare_equivalent_durations,
-    primary_or_secondary, points_in_flare, points_abv_threshold, amp_sigma)
+    #return as pandas data frame
+    #Make as dictionary
+    flare_results = {'T_peak' : flare_peak_times,
+                     'T_start' : flare_start_times,
+                     'T_end' : flare_end_times,
+                     'Amplitude' : flare_amps,
+                     'ED' : flare_equivalent_durations,
+                     'Primary_or_Secondary' : primary_or_secondary,
+                     'Num_Points' : points_in_flare,
+                     'Num_Abv_Threshold' : points_abv_threshold,
+                     'Amp_Sigma' : amp_sigma
+    }
+    #Transform into DataFrame
+    flare_results = pd.DataFrame(flare_results)
+
+    return flare_results
 
 
 def flare_energy_calc(star_luminosity, equivalent_duration):
@@ -1462,23 +1476,23 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                                   min_break = min_break, clip_breaks = clip_breaks, flag_values = flag_values)
     
     #flare peak times
-    flare_peak_times = flare_results[0]
+    flare_peak_times = flare_results['T_peak']
     #flare start times
-    flare_start_times = flare_results[1]
+    flare_start_times = flare_results['T_start']
     #flare end times
-    flare_end_times = flare_results[2]
+    flare_end_times = flare_results['T_end']
     #flare amps
-    flare_amps = flare_results[3]
+    flare_amps = flare_results['Amplitude']
     #flare eds
-    flare_eds = flare_results[4]
+    flare_eds = flare_results['ED']
     #flare type
-    flare_type = flare_results[5]
+    flare_type = flare_results['Primary_or_Secondary']
     #number of points associated with a flare
-    num_points_in_flare = flare_results[6]
+    num_points_in_flare = flare_results['Num_Points']
     #number of points above with a threshold
-    num_abv_threshold = flare_results[7]
+    num_abv_threshold = flare_results['Num_Abv_Threshold']
     #sigma amplitude
-    amp_sigma = flare_results[8]
+    amp_sigma = flare_results['Amp_Sigma']
                     
     ###########Let's find the points belonging to the flares###########
     
