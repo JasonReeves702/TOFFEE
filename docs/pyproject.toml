@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "star_toffee"
-version = "1.5.2"
+version = "1.5.3"
 dependencies = ['astropy>=7.0.0',
                 'astroquery>=0.4.11',
                 'lightkurve>=2.5.1',
