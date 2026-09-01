@@ -1377,6 +1377,484 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
     primary_or_secondary, points_in_flare, points_abv_threshold, amp_sigma)
 
 
+def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 3.0,
+               num_consec = 3, num_consec_sec = 3, loss = 'huber',
+               rise_bounds = None, rise_func = 'gaussian',
+               decay_func = 'dbl_exp_decay', fit_peak = False, p0_decay = None, decay_bounds = None,
+               fit_multiple_secs = True,
+               prim_marginal_threshold = 3.0, num_below_threshold = 3,
+               min_break = 0.25, clip_breaks = 200, flag_values = [0],
+               primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green', cadence_color = 'black',
+               fontsize = 24, labelsize = 18, Target = None, Sector = None):
+
+    mask = light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200)
+    flux_std = np.nanpercentile(flux - 1, 84)
+    
+    #find flares
+    flare_results = detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
+                                  secondary_threshold = secondary_threshold,
+                                  num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                                  rise_bounds = rise_bounds, rise_func = rise_func,
+                                  decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay, decay_bounds = decay_bounds,
+                                  fit_multiple_secs = fit_multiple_secs,
+                                  prim_marginal_threshold = prim_marginal_threshold,
+                                  num_below_threshold = num_below_threshold,
+                                  min_break = min_break, clip_breaks = clip_breaks, flag_values = flag_values)
+    
+    #flare peak times
+    flare_peak_times = flare_results['T_peak']
+    #flare start times
+    flare_start_times = flare_results['T_start']
+    #flare end times
+    flare_end_times = flare_results['T_end']
+    #flare amps
+    flare_amps = flare_results['Amplitude']
+    #flare eds
+    flare_eds = flare_results['ED']
+    #flare type
+    flare_type = flare_results['Primary_or_Secondary']
+    #number of points associated with a flare
+    num_points_in_flare = flare_results['Num_Points']
+    #number of points above with a threshold
+    num_abv_threshold = flare_results['Num_Abv_Threshold']
+    #sigma amplitude
+    amp_sigma = flare_results['Amp_Sigma']
+                    
+    ###########Let's find the points belonging to the flares###########
+    
+    #For primaries
+    #array holding the times of the flare points
+    times_of_primary_flares = np.array([])
+    #array holding associated fluxes
+    fluxes_of_primary_flares = np.array([])
+    #array holding peak times
+    peak_time_of_primary = np.array([])
+    #array holding peak flux
+    peak_flux_of_primary = np.array([])
+    
+    #array holding the times of the flare points
+    times_of_secondary_flares = np.array([])
+    #array holding associated fluxes
+    fluxes_of_secondary_flares = np.array([])
+    #array holding peak times
+    peak_time_of_secondary = np.array([])
+    #array holding peak flux
+    peak_flux_of_secondary = np.array([])
+    
+    #array holding the times of the flare points
+    times_of_tertiary_flares = np.array([])
+    #array holding associated fluxes
+    fluxes_of_tertiary_flares = np.array([])
+    #array holding peak times
+    peak_time_of_tertiary = np.array([])
+    #array holding peak flux
+    peak_flux_of_tertiary = np.array([])
+    
+    #iterate through the flares and find the relevant times
+    for i in range(len(flare_start_times)):
+        start = flare_start_times[i]
+        end = flare_end_times[i]
+        #find indices of flux points between these values
+        flare_flux_points = np.where((time >= start) & (time <= end))[0]
+        #and log those times in the flare
+        flare_times = time[flare_flux_points]
+        #and log those fluxes
+        flare_fluxes = flux[flare_flux_points]
+        #find the peak flux
+        peak_flux = np.max(flare_fluxes)
+        #and associated time
+        peak_time = flare_times[np.argmax(flare_fluxes)]
+        #sort depending on type
+        if (flare_type[i] == 'primary'):  
+            #add to the list
+            times_of_primary_flares = np.append(times_of_primary_flares, flare_times)
+            fluxes_of_primary_flares = np.append(fluxes_of_primary_flares, flare_fluxes)
+            peak_flux_of_primary = np.append(peak_flux_of_primary, peak_flux)
+            peak_time_of_primary = np.append(peak_time_of_primary, peak_time)
+    
+        elif (flare_type[i] == 'secondary'):
+            #add to the list
+            times_of_secondary_flares = np.append(times_of_secondary_flares, flare_times)
+            fluxes_of_secondary_flares = np.append(fluxes_of_secondary_flares, flare_fluxes)
+            peak_flux_of_secondary = np.append(peak_flux_of_secondary, peak_flux)
+            peak_time_of_secondary = np.append(peak_time_of_secondary, peak_time)
+    
+        elif (flare_type[i] == 'tertiary'):
+            #add to the list
+            times_of_tertiary_flares = np.append(times_of_tertiary_flares, flare_times)
+            fluxes_of_tertiary_flares = np.append(fluxes_of_tertiary_flares, flare_fluxes)
+            peak_flux_of_tertiary = np.append(peak_flux_of_tertiary, peak_flux)
+            peak_time_of_tertiary = np.append(peak_time_of_tertiary, peak_time)
+    
+    #First plot: Show the flattened lightcurve with the flares found and colored in
+    plt.figure(figsize = (10,8))
+    plt.scatter(time, flux, s = 6, color = 'gray')
+    #plot all the good flux points not masked 
+    
+    plt.scatter(time[mask], flux[mask], s = 6, color = cadence_color, label = 'Used')
+    #the plot for the residual periodogram result
+    #plt.plot(time, flatt_trend, color = 'yellow')
+    
+    #color the points around the primary flares
+    plt.scatter(times_of_primary_flares, fluxes_of_primary_flares, color = primary_color, s = 6)
+    #color the points around the secondary flares
+    plt.scatter(times_of_secondary_flares, fluxes_of_secondary_flares, color = secondary_color, s = 6, zorder = 10)
+    #color the points around the tertiary flares
+    plt.scatter(times_of_tertiary_flares, fluxes_of_tertiary_flares, color = tertiary_color, s = 6, zorder = 10)
+    
+    #add primary flare peaks
+    plt.scatter(peak_time_of_primary, peak_flux_of_primary, marker = '*', s = 200, color = primary_color)
+    #add secondary flare peaks
+    plt.scatter(peak_time_of_secondary, peak_flux_of_secondary, marker = '*', s = 200, color = secondary_color)
+    #add tertiary flare peaks
+    plt.scatter(peak_time_of_tertiary, peak_flux_of_tertiary, marker = '*', s = 200, color = tertiary_color)
+    #add three sigma line
+    plt.hlines(primary_threshold * flux_std + 1, min(time), max(time), color = tertiary_color, linewidth = 2)
+    plt.xlabel('Time (BJD)', fontsize = 24, font = 'Serif')
+    plt.ylabel(r'Normalized Flux', fontsize = 24, font = 'Serif')
+    plt.ylim(0.9, 1.25)
+    plt.tick_params(direction = 'in', labelsize = 20, width = 3, length = 10, labelfontfamily = 'Serif')
+    #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = 24)
+    plt.show()
+    
+    #################PRINT FLARE MORPHOLOGY AND FITTING#################
+    
+    for i in range(len(flare_peak_times)):
+    
+        if flare_type[i] == 'primary':
+    
+            #Unpack indices of the flare
+            #flare peak time index
+            flare_peak_index = np.where(time == flare_peak_times[i])[0][0]
+            #flare start time index
+            index_start = np.where(time == flare_start_times[i])[0][0]
+            #flare end time index
+            index_end = np.where(time == flare_end_times[i])[0][0]
+        
+            flare_peak_time = flare_peak_times[i]
+            flare_times = time[index_start:index_end]
+        
+            #Unpack flare fluxes
+            flare_peak_flux = flare_amps[i] + 1
+        
+            #################LEFT FIT#################
+            #Perform model fit
+            rise_time = time[index_start:flare_peak_index+1]
+            rise_flux = flux[index_start:flare_peak_index+1]
+            rise_flux_err = flux_err[index_start:flare_peak_index+1]
+
+            #figure out which function to plot
+            if rise_func == 'gaussian':
+                def guassian_rise(x, alpha, sigma, c):
+                    return alpha * np.exp(-(x - flare_peak_time)**2 / (2 * (sigma)**2)) + c
+                #fit gaussian to the rise, get parameters and residuals
+                p_opt_rise, perr, rise_residuals = fit_gaussian_rise(rise_time, rise_flux, rise_flux_err,
+                                                                     flare_peak_time, loss = loss, bounds = rise_bounds)
+            #set flux threshold for plotting
+            flux_threshold = primary_threshold * flux_std + 1
+            
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            #plot flare points
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = primary_color, label = 'Primary Flare')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = primary_color, capsize = 3)
+            
+            #plot fitted function
+            if rise_func == 'gaussian':
+                plt.plot(rise_time, guassian_rise(rise_time, *p_opt_rise), label = 'Rise Fit',
+                         color = secondary_color, linewidth = 2)
+        
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                       linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+            
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+        
+            #Find the residuals            
+            median_flux_err = np.nanmedian(flux_err)
+            median_flux = np.nanmedian(flux)
+            threshold = secondary_threshold * median_flux_err
+            
+            plt.figure(figsize = (10,8))
+            plt.scatter(rise_time, rise_residuals, color = cadence_color)
+            plt.errorbar(rise_time, rise_residuals, yerr = median_flux_err, color = cadence_color, capsize = 4)
+            plt.hlines(threshold, rise_time[0], rise_time[-1],
+                      linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Residuals', fontsize = fontsize)
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.show()
+        
+            #################RIGHT FIT#################
+            decay_time = time[flare_peak_index:index_end+1]
+            decay_flux = flux[flare_peak_index:index_end+1]
+            decay_flux_err = flux_err[flare_peak_index:index_end+1]
+
+            def dbl_exp_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (alpha_0 * np.exp(- beta_0 * (x - flare_peak_time)) +
+                        alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))  + C)
+            def gompertz_decay(x, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
+                                + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
+            def gompertz_logistic(x, A, alpha_0, beta_0, alpha_1, beta_1, C):
+                #alpha_0, beta_0, alpha_1, beta_1, C = theta
+                return (A * np.exp(alpha_0 * np.exp(- beta_0 * (x - flare_peak_time))
+                                + alpha_1 * np.exp(- beta_1 * (x - flare_peak_time))) + C)
+            
+            #figure out which function to plot
+            p_opt_decay, perr, decay_residuals = call_decay_model(decay_time, decay_flux, decay_flux_err, flare_peak_time,
+                                                              loss = loss, bounds = decay_bounds, p0 = p0_decay,
+                                                              model = decay_func, fit_peak = fit_peak)
+            
+            ###########ROBUST FITTING###########
+            if decay_func == 'robust':
+                ####Fit regular double exponential decay###
+                p_opt_dbl_exp, perr, dbl_exp_residuals = p_opt_decay[0], perr[0], decay_residuals[0]
+                ####Fit product gompertz###
+                p_opt_gompertz, perr, gompertz_residuals = p_opt_decay[1], perr[1], decay_residuals[1]
+                
+            if decay_func == 'super_robust':
+                ####Fit regular double exponential decay###
+                p_opt_dbl_exp, perr_dbl_exp, dbl_exp_residuals = p_opt_decay[0], perr[0], decay_residuals[0]
+                ####Fit product gompertz###
+                p_opt_gompertz, perr_gomp, gompertz_residuals = p_opt_decay[1], perr[1], decay_residuals[1]
+                if len(p_opt_decay) > 2: #for short flares we didn't do the fitting without the peaks
+                    ####Fit dbl exponential w/o peak#
+                    p_opt_dbl_exp_wo_peak, perr_dbl_exp_wo_peak, dbl_exp_residuals_wo_peak =  p_opt_decay[2], perr[2], decay_residuals[2]
+                    ####Fit product gompertz w/o peak#
+                    p_opt_gompertz_wo_peak, perr_gomp_wo_peak, gompertz_residuals_wo_peak = p_opt_decay[3], perr[3], decay_residuals[3]
+            
+            #Set threshold for plotting
+            flux_threshold = primary_threshold * flux_std + 1
+
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = primary_color, label = 'Flare Points')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = primary_color, capsize = 3)
+            
+            #plot the decay fit
+            if decay_func == 'dbl_exp_decay':
+                plt.plot(decay_time,
+                     dbl_exp_decay(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
+
+            if decay_func == 'gomp_decay':
+                plt.plot(decay_time,
+                     gompertz_decay(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
+                
+            if decay_func == 'gomp_logistic':
+                plt.plot(decay_time,
+                     gompertz_logistic(decay_time, *p_opt_decay), label = 'Decay Fit', linewidth = 2, color = 'red')
+
+            #plotting all three
+            if decay_func == 'robust':
+                plt.plot(decay_time,
+                     dbl_exp_decay(decay_time, *p_opt_dbl_exp), label = 'Double Exp',
+                         linewidth = 2, color = 'black', linestyle = '-')
+                plt.plot(decay_time,
+                     gompertz_decay(decay_time, *p_opt_gompertz), label = 'Product Gompertz',
+                         linewidth = 2, color = 'green', linestyle = '-.')
+                
+            #plotting all three
+            if decay_func == 'super_robust':
+                plt.plot(decay_time,
+                     dbl_exp_decay(decay_time, *p_opt_dbl_exp), label = 'Double Exp',
+                         linewidth = 2, color = 'black', linestyle = '-')
+                plt.plot(decay_time,
+                     gompertz_decay(decay_time, *p_opt_gompertz), label = 'Product Gompertz',
+                         linewidth = 2, color = 'green', linestyle = '-.')
+                if len(p_opt_decay) > 2:
+                    plt.plot(decay_time,
+                        dbl_exp_decay(decay_time, *p_opt_dbl_exp_wo_peak), label = 'Double Exp w/o Peak',
+                            linewidth = 2, color = 'blue', linestyle = '--')
+                    plt.plot(decay_time,
+                        gompertz_decay(decay_time, *p_opt_gompertz_wo_peak), label = 'Product Gompertz w/o Peak',
+                            linewidth = 2, color = 'red', linestyle = ':')
+                
+            
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                      linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (days)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+            
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+
+            #Plot the residuals
+            
+            median_flux_err = np.nanmedian(flux_err)
+            median_flux = np.nanmedian(flux)
+            threshold = secondary_threshold * median_flux_err
+            
+            plt.figure(figsize = (10,8))
+
+            #if the decay function is anything but robust then we only have one set of residuals
+            if decay_func == 'robust':
+                #plot residuals from double exponential decay
+                plt.scatter(decay_time, dbl_exp_residuals, color = 'black')
+                plt.errorbar(decay_time, dbl_exp_residuals, yerr = median_flux_err,
+                             color = 'black', capsize = 4, linestyle = '-', label = 'Double Exp')
+                #plot residuals from product gompertz decay without the peak
+                plt.scatter(decay_time, gompertz_residuals, color = 'green')
+                plt.errorbar(decay_time, gompertz_residuals, yerr = median_flux_err,
+                             color = 'green', capsize = 4, linestyle = '-.', label = 'Product Gompertz')
+                
+            elif decay_func == 'super_robust':
+                #plot residuals from double exponential decay
+                plt.scatter(decay_time, dbl_exp_residuals, color = 'black')
+                plt.errorbar(decay_time, dbl_exp_residuals, yerr = median_flux_err,
+                             color = 'black', capsize = 4, linestyle = '-', label = 'Double Exp')
+                #plot residuals from product gompertz decay without the peak
+                plt.scatter(decay_time, gompertz_residuals, color = 'green')
+                plt.errorbar(decay_time, gompertz_residuals, yerr = median_flux_err,
+                             color = 'green', capsize = 4, linestyle = '-.', label = 'Product Gompertz')
+                if len(p_opt_decay) > 2:
+                    #plot residuals from double exponential decay w/o the peak
+                    plt.scatter(decay_time, dbl_exp_residuals_wo_peak, color = 'blue')
+                    plt.errorbar(decay_time, dbl_exp_residuals_wo_peak, yerr = median_flux_err,
+                                color = 'blue', capsize = 4, linestyle = '--', label = 'Double Exp w/o Peak')
+                    #plot residuals from product gompertz decay without the peak
+                    plt.scatter(decay_time, gompertz_residuals_wo_peak, color = 'red')
+                    plt.errorbar(decay_time, gompertz_residuals_wo_peak, yerr = median_flux_err,
+                                color = 'red', capsize = 4, linestyle = ':', label = 'Product Gompertz w/o Peak')
+                
+            else:
+                plt.scatter(decay_time, decay_residuals, color = cadence_color)
+                plt.errorbar(decay_time, decay_residuals, yerr = median_flux_err, color = cadence_color, capsize = 4)
+            
+            plt.hlines(threshold, decay_time[0], decay_time[-1],
+                      linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Residuals', fontsize = fontsize)
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.show()
+
+            #Now plot the secondaries in the time series if they were found
+        if flare_type[i] == 'secondary':
+    
+            #Unpack indices of the flare
+            #flare peak time index
+            flare_peak_index = np.where(time == flare_peak_times[i])[0][0]
+            #flare start time index
+            index_start = np.where(time == flare_start_times[i])[0][0]
+            #flare end time index
+            index_end = np.where(time == flare_end_times[i])[0][0]
+        
+            flare_peak_time = flare_peak_times[i]
+            flare_times = time[index_start:index_end]
+        
+            #Unpack flare fluxes
+            flare_peak_flux = flux[np.where(time == flare_peak_time)[0]]
+    
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            #plot flare points
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = secondary_color, label = 'Secondary Flare')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = secondary_color, capsize = 3)
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                       linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+        
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+
+        if flare_type[i] == 'tertiary':
+    
+            #Unpack indices of the flare
+            #flare peak time index
+            flare_peak_index = np.where(time == flare_peak_times[i])[0][0]
+            #flare start time index
+            index_start = np.where(time == flare_start_times[i])[0][0]
+            #flare end time index
+            index_end = np.where(time == flare_end_times[i])[0][0]
+        
+            flare_peak_time = flare_peak_times[i]
+            flare_times = time[index_start:index_end]
+        
+            #Unpack flare fluxes
+            flare_peak_flux = flux[np.where(time == flare_peak_time)[0]]
+    
+            #Plot all flux points
+            plt.figure(figsize = (10,8))
+            plt.scatter(time, flux, s = 10, color = cadence_color, label = 'Background Points')
+            plt.errorbar(time, flux, yerr = flux_err, linestyle = '', color = cadence_color, capsize = 3)
+            #plot flare points
+            plt.scatter(time[index_start:index_end+1], flux[index_start:index_end+1], s = 10,
+                        color = tertiary_color, label = 'Tertiary Flare')
+            plt.errorbar(time[index_start:index_end+1], flux[index_start:index_end+1],
+                         yerr = flux_err[index_start:index_end+1], linestyle = '', color = tertiary_color, capsize = 3)
+            plt.hlines(primary_threshold * flux_std + 1, flare_peak_time - 0.025, flare_peak_time + 0.1,
+                       linewidth = 3, linestyle = '--', color = 'gray')
+            plt.xlabel('Time (BJD)', fontsize = fontsize)
+            plt.ylabel('Detrended flux', fontsize = fontsize)
+            #Print title of target at sector for record keeping
+            if (Target != None) and (Sector != None):
+                plt.title('Target: ' + str(Target) + ' Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target == None) and (Sector != None):
+                plt.title('Sector: ' + str(Sector), fontsize = fontsize)
+            if (Target != None) and (Sector == None):
+                plt.title('Target: ' + str(Target), fontsize = fontsize)
+            plt.ylim(1 - flux_std, flare_peak_flux + 0.05)
+            plt.xlim(flare_peak_time - 0.025, flare_peak_time + 0.1)
+            plt.xticks([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1],
+                       np.round([flare_peak_time - 0.02, flare_peak_time + 0.04, flare_peak_time + 0.1], 2))
+            plt.tick_params(direction = 'in', labelsize = labelsize)
+            plt.legend(fontsize = fontsize)
+            plt.show()
+
+
 def flare_energy_calc(star_luminosity, equivalent_duration):
     #units of energy depend on stellar luminosity input
     #Input of W will give Joules for Ebol, input of erg/s will give erg
