@@ -13,6 +13,7 @@ from astropy.table import Table
 from astropy.time import Time
 from astropy.timeseries import LombScargle
 from astroquery.mast import Catalogs
+from functools import reduce
 import pandas as pd
 import os
 import requests
@@ -70,6 +71,7 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
         #     ax.set_xlim(np.min(lc_t[~tot_mask])-1, np.max(lc_t[~tot_mask])+1)
         #     print(len(lc_t[~tot_mask]))
         #     plt.show()
+        #     plt.close()
         #     return
         
         # fig, axs = plt.subplots(len(orbit_masks), 1, figsize=(10,4*len(orbit_masks)))
@@ -99,7 +101,13 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
     
     # Wotan flatten and store flattened light curve
     if short_window != None:
-        lc_short, short_trend = wotan.flatten(orbit_t,lc_working,window_length=short_window,return_trend=True)
+        lc_short, short_trend = wotan.flatten(orbit_t, lc_working, window_length=short_window,
+                                       break_tolerance=0.5, return_trend=True) 
+        #Take care of nan value edge cases
+        edge_nan = np.isnan(lc_short)
+        if edge_nan.any():
+            lc_short[edge_nan] = np.interp(orbit_t[edge_nan], orbit_t[~edge_nan], lc_working[~edge_nan])
+
         lc_errs_short = lc_errs_working / short_trend
         if plot_results == True:
             fig, axs = plt.subplots(2, 1, figsize=(10,4))
@@ -112,6 +120,7 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
             ax.errorbar(orbit_t, lc_short, lc_errs_short, fmt='.')
             ax.plot(orbit_t, scipy.ndimage.uniform_filter1d(lc_short, size=10), c='orange', zorder=3, linewidth=1)
             plt.show()
+            plt.close()
             
         lc_wotan = np.array([lc_short, lc_errs_short, short_trend])
         
@@ -143,7 +152,8 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
             # ax.set_xlim(2494-5, 2494)
             ax.set_ylim(wind_down, wind_up)
             plt.show()
-        lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
+            plt.close()
+        #lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
         
         
         # # Create sine function for scipy.curve_fit
@@ -152,34 +162,36 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
             
         # # Loop through TESS orbit times and select data within each orbit
         # sine_trend = np.array([])
+        # before the orbit loop
+        full_sine_trend = np.full(len(orbit_t), 1.0)
+
         for ii in range(0, len(tess_start_times_bjd)):
             orbit_up = orbit_t < tess_end_times_bjd[ii]
             orbit_down = orbit_t > tess_start_times_bjd[ii]
             orbit_mask = orbit_up & orbit_down
-            if True not in orbit_mask: # Skip if no data in orbit
+            if True not in orbit_mask:
                 continue
-            orb_trend = np.full(len(orbit_t[orbit_mask]), 1)
-            # Conduct periodograms and fit sine if signal is found, then repeat
-            # for jj in range(0,1):
+
             frequency = np.linspace(periodogram[0], periodogram[1], 100000)
-            for jj in range(0,8):
-                
+            for jj in range(0, 8):
                 ls = LombScargle(orbit_t[orbit_mask], lc_sine[orbit_mask], lc_errs_sine[orbit_mask])
                 power = ls.power(frequency)
 
-                if power[500] == np.nan:
-
+                if np.isnan(power[500]):
                     return 'Broken!', 'Broken!', 'Broken!', 'Broken!', 'Broken!', 'Broken!'
-                    
+
                 prob_false = ls.false_alarm_probability(power.max())
-                if prob_false > 0.2: # No sinusoidal signal, exit loop
+                if prob_false > 0.2:
                     break
                 elif prob_false < 0.2:
                     periodic = True
-                    # else:
-                        # print("SINE FLATTENED", end='\n')
-                        
-                    peak_freq = frequency[np.where(power==power.max())[0][0]]
+                    peak_freq = frequency[np.where(power == power.max())[0][0]]
+
+                # --- always compute the trend, whether or not we're plotting ---
+                half_window = int(0.5/peak_freq * 24 * 3600 / 120)
+                kernel_size = half_window + 1 if half_window % 2 == 0 else half_window
+                window_median = scipy.signal.medfilt(lc_sine, kernel_size=kernel_size)
+
                 if plot_results == True:
                     plot_t = orbit_t[orbit_mask]
                     plot_mask = np.abs(orbit_t - plot_t[-1]) < 5/peak_freq
@@ -188,21 +200,18 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                     plt.errorbar(orbit_t[mask], lc_sine[mask], yerr=lc_errs_sine[mask], fmt='.')
                     plt.xlabel('Time (BJD - 2,7457,000)')
                     plt.ylabel('Normalised And Flattened flux')
-                    # plt.plot(orbit_t[mask], scipy.ndimage.uniform_filter1d(lc_sine, size=10)[mask], c='orange', zorder=3, linewidth=3)
-                    half_window = int(0.5/peak_freq * 24 * 3600 / 120)
-                    lc_sine_wotan, sine_trend = wotan.flatten(orbit_t,lc_working,window_length=half_window*120/3600/24,
-                                                              method='median',return_trend=True)
-                    if half_window % 2 == 0:
-                        window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window+1)
-                        plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
-                    else:
-                        window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window)
-                        plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
-                    plt.plot(orbit_t[mask], sine_trend[mask], c='red', zorder=2, linewidth=3)
-                    lc_sine[orbit_mask] = lc_sine[orbit_mask] / window_median[orbit_mask]
-                    lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / window_median[orbit_mask]
-                    
+                    plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
                     plt.show()
+                    plt.close()
+
+                # --- accumulate this pass's trend into the running total for this orbit ---
+                full_sine_trend[orbit_mask] = full_sine_trend[orbit_mask] * window_median[orbit_mask]
+
+                # --- apply the flatten unconditionally ---
+                lc_sine[orbit_mask] = lc_sine[orbit_mask] / window_median[orbit_mask]
+                lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / window_median[orbit_mask]
+
+        sine_trend = full_sine_trend
         #     # print(sine_trend)
         # lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
     if short_window == None:
@@ -210,6 +219,7 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
     elif periodogram == None:
         return orbit_t, lc_quad, lc_wotan, periodic
     else:
+        lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
         return orbit_t, lc_quad, lc_wotan, lc_flat, periodic
     
 
@@ -482,6 +492,7 @@ def spot_mod(lc_t, lc_flux, lc_errs, benchmark, plot=False, params=None, rand=Fa
             #     pass
             #     print(stat)
             plt.show()
+            plt.close()
 
         # tracemalloc.stop()
 
@@ -990,9 +1001,9 @@ def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0,
 
 
 #find the residuals between the best fit function and the flux points
-def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber'):
+def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0, np.inf)):
     #run best fit
-    params_opt = model_fit(func, time, flux, flux_err, p0, loss)[0]
+    params_opt = model_fit(func, time, flux, flux_err, p0, loss = loss, bounds = bounds)[0]
     #find model fluxes
     model_fluxes = func(time, *params_opt)
     #find residuals
@@ -1877,6 +1888,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
     plt.tick_params(direction = 'in', labelsize = 20, width = 3, length = 10, labelfontfamily = 'Serif')
     #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = 24)
     plt.show()
+    plt.close()
     
     #################PRINT FLARE MORPHOLOGY AND FITTING#################
     
@@ -1948,6 +1960,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             plt.tick_params(direction = 'in', labelsize = labelsize)
             plt.legend(fontsize = fontsize)
             plt.show()
+            plt.close()
         
             #Find the residuals            
             median_flux_err = np.nanmedian(flux_err)
@@ -1963,6 +1976,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             plt.ylabel('Residuals', fontsize = fontsize)
             plt.tick_params(direction = 'in', labelsize = labelsize)
             plt.show()
+            plt.close()
         
             #################RIGHT FIT#################
             decay_time = time[flare_peak_index:index_end+1]
@@ -2075,6 +2089,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             plt.tick_params(direction = 'in', labelsize = labelsize)
             plt.legend(fontsize = fontsize)
             plt.show()
+            plt.close()
 
             #Plot the residuals
             
@@ -2124,6 +2139,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             plt.ylabel('Residuals', fontsize = fontsize)
             plt.tick_params(direction = 'in', labelsize = labelsize)
             plt.show()
+            plt.close()
 
             #Now plot the secondaries in the time series if they were found
         if flare_type[i] == 'secondary':
@@ -2170,6 +2186,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             plt.tick_params(direction = 'in', labelsize = labelsize)
             plt.legend(fontsize = fontsize)
             plt.show()
+            plt.close()
 
         if flare_type[i] == 'tertiary':
     
@@ -2214,6 +2231,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
             plt.tick_params(direction = 'in', labelsize = labelsize)
             plt.legend(fontsize = fontsize)
             plt.show()
+            plt.close()
 
 
 def flare_energy_calc(star_luminosity, equivalent_duration):
