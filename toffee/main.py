@@ -18,7 +18,45 @@ import pandas as pd
 import os
 import requests
 from pathlib import Path
-from .get_tess_orbit import download_csv_file
+from .get_tess_orbit import download_csv_file, tess_FFI_time_url
+
+
+#NumPy 2.0 renamed np.trapz to np.trapezoid and deprecated the old name.
+#Bind whichever name the installed version of NumPy provides so that TOFFEE
+#runs on both NumPy 1.x and NumPy 2.x without emitting a deprecation warning.
+#The leading underscore keeps this helper out of 'from .main import *', so it
+#stays out of the public API.
+if hasattr(np, 'trapezoid'):
+    #NumPy 2.0 and newer
+    _trapezoid = np.trapezoid
+else:
+    #NumPy 1.x, where the same function is still named trapz
+    _trapezoid = np.trapz
+
+
+#TOFFEE raises these instead of returning sentinel values, so a caller that
+#forgets to check gets a loud failure rather than a silently wrong result.
+#Everything TOFFEE raises inherits from ToffeeError, which lets a long loop
+#over many light curves skip the sectors TOFFEE cannot handle while still
+#crashing on a genuine bug:
+#
+#    try:
+#        t, lc_quad, lc_wotan, lc_flat, periodic = toffee.flatten(...)
+#    except toffee.ToffeeError as error:
+#        print(name, error)
+#        continue
+
+
+class ToffeeError(Exception):
+    '''Base class for every error TOFFEE raises, so a caller can catch only ours'''
+
+
+class LightCurveError(ToffeeError):
+    '''The light curve cannot be analysed in the state it was handed over'''
+
+
+class DetrendingError(ToffeeError):
+    '''The detrending could not produce a usable light curve'''
 
 
 def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, periodogram=None):
@@ -30,12 +68,13 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
     #################################################################
     # Import Tess sector time data, to know when observation periods for the
     # sectors start and end.
-    #get from tess.mit
-    tess_orbit_time_url = 'https://tess.mit.edu/public/files/TESS_orbit_times.csv'
-    Tess_orbit_times = download_csv_file(tess_orbit_time_url)
-    Tess_sector_times= Table.read(Tess_orbit_times, format='ascii.csv')
-    Tess_start_times = Time(Tess_sector_times['Start of Orbit'], format='iso', scale='utc')
-    Tess_end_times = Time(Tess_sector_times['End of Orbit'], format='iso', scale='utc')
+    # Fetch the FFI observation times from tess.mit.edu, caching them inside the
+    # package. download_csv_file falls back to the cached copy if the download
+    # fails, so this works offline once the file has been fetched at least once.
+    Tess_FFI_times = download_csv_file(tess_FFI_time_url)
+    Tess_sector_times= Table.read(Tess_FFI_times, format='ascii.csv')
+    Tess_start_times = Time(Tess_sector_times['Start Time'], format='iso', scale='utc')
+    Tess_end_times = Time(Tess_sector_times['End Time'], format='iso', scale='utc')
     tess_start_times_tdb = Tess_start_times.tdb
     tess_end_times_tdb = Tess_end_times.tdb
     tess_start_times_bjd =  tess_start_times_tdb.jd - 2457000
@@ -45,12 +84,6 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
     orbit_lc_errs = np.array([])
     orbit_trends = np.array([])
     orbit_masks = []
-
-    #Polyfit won't work if there are any nan values in the fluxes, so we'll need to get rid of those
-
-    lc_t = lc_t[np.isnan(raw_lc) == False]
-    raw_lc_errs = raw_lc_errs[np.isnan(raw_lc) == False]
-    raw_lc = raw_lc[np.isnan(raw_lc) == False]
     
     tot_mask = np.full(len(lc_t), False)
     # Loop through TESS orbit times and select data within each orbit
@@ -71,7 +104,6 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
         #     ax.set_xlim(np.min(lc_t[~tot_mask])-1, np.max(lc_t[~tot_mask])+1)
         #     print(len(lc_t[~tot_mask]))
         #     plt.show()
-        #     plt.close()
         #     return
         
         # fig, axs = plt.subplots(len(orbit_masks), 1, figsize=(10,4*len(orbit_masks)))
@@ -101,13 +133,7 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
     
     # Wotan flatten and store flattened light curve
     if short_window != None:
-        lc_short, short_trend = wotan.flatten(orbit_t, lc_working, window_length=short_window,
-                                       break_tolerance=0.5, return_trend=True) 
-        #Take care of nan value edge cases
-        edge_nan = np.isnan(lc_short)
-        if edge_nan.any():
-            lc_short[edge_nan] = np.interp(orbit_t[edge_nan], orbit_t[~edge_nan], lc_working[~edge_nan])
-
+        lc_short, short_trend = wotan.flatten(orbit_t,lc_working,window_length=short_window,return_trend=True)
         lc_errs_short = lc_errs_working / short_trend
         if plot_results == True:
             fig, axs = plt.subplots(2, 1, figsize=(10,4))
@@ -120,7 +146,6 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
             ax.errorbar(orbit_t, lc_short, lc_errs_short, fmt='.')
             ax.plot(orbit_t, scipy.ndimage.uniform_filter1d(lc_short, size=10), c='orange', zorder=3, linewidth=1)
             plt.show()
-            plt.close()
             
         lc_wotan = np.array([lc_short, lc_errs_short, short_trend])
         
@@ -152,45 +177,65 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
             # ax.set_xlim(2494-5, 2494)
             ax.set_ylim(wind_down, wind_up)
             plt.show()
-            plt.close()
-        #lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
-        
-        
+
         # # Create sine function for scipy.curve_fit
         # def sine_func(x, A, B, C, D, E, F, G, H, I, J, K):
         #         return (A*x**2+B*x+C) * np.sin(D * x + E) + (F*x**2+G*x+H) * np.sin(I * x + J) + K
             
         # # Loop through TESS orbit times and select data within each orbit
         # sine_trend = np.array([])
-        # before the orbit loop
-        full_sine_trend = np.full(len(orbit_t), 1.0)
-
         for ii in range(0, len(tess_start_times_bjd)):
             orbit_up = orbit_t < tess_end_times_bjd[ii]
             orbit_down = orbit_t > tess_start_times_bjd[ii]
             orbit_mask = orbit_up & orbit_down
-            if True not in orbit_mask:
+            if True not in orbit_mask: # Skip if no data in orbit
                 continue
-
+            orb_trend = np.full(len(orbit_t[orbit_mask]), 1)
+            # Conduct periodograms and fit sine if signal is found, then repeat
+            # for jj in range(0,1):
             frequency = np.linspace(periodogram[0], periodogram[1], 100000)
-            for jj in range(0, 8):
+            for jj in range(0,8):
+                
                 ls = LombScargle(orbit_t[orbit_mask], lc_sine[orbit_mask], lc_errs_sine[orbit_mask])
                 power = ls.power(frequency)
 
-                if np.isnan(power[500]):
-                    return 'Broken!', 'Broken!', 'Broken!', 'Broken!', 'Broken!', 'Broken!'
+                #a non-finite periodogram means the Lomb-Scargle had nothing usable to
+                #work with, so the sine correction below cannot be trusted. The old code
+                #tested power[500] == np.nan, which is always False because nan compares
+                #unequal to everything, so this never actually fired.
+                if not np.isfinite(power).all():
+                    raise DetrendingError('the Lomb-Scargle periodogram returned non-finite power '
+                                          'for the orbit starting at %.4f; the light curve may still '
+                                          'contain gaps or non-finite flux' % orbit_t[orbit_mask][0])
 
                 prob_false = ls.false_alarm_probability(power.max())
-                if prob_false > 0.2:
+                if prob_false > 0.2: # No sinusoidal signal, exit loop
                     break
                 elif prob_false < 0.2:
                     periodic = True
-                    peak_freq = frequency[np.where(power == power.max())[0][0]]
-
-                # --- always compute the trend, whether or not we're plotting ---
+                    # else:
+                        # print("SINE FLATTENED", end='\n')
+                        
+                    peak_freq = frequency[np.where(power==power.max())[0][0]]
+                #Build the local median-filtered trend that removes the periodic
+                #signal from this orbit's data. This has to run every iteration
+                #regardless of plot_results, since lc_sine/lc_errs_sine are
+                #divided by window_median below whether or not we're plotting --
+                #previously this block only ran under plot_results == True, so
+                #the sine correction below was silently skipped whenever
+                #plot_results was False.
                 half_window = int(0.5/peak_freq * 24 * 3600 / 120)
-                kernel_size = half_window + 1 if half_window % 2 == 0 else half_window
-                window_median = scipy.signal.medfilt(lc_sine, kernel_size=kernel_size)
+                #a half_window this large relative to the light curve means the detected
+                #period is longer than the data actually spans -- medfilt would silently
+                #zero-pad in that case, corrupting the correction rather than raising an
+                #error, so skip correcting this orbit instead of trusting a bogus window
+                if half_window >= len(lc_sine):
+                    break
+                lc_sine_wotan, sine_trend = wotan.flatten(orbit_t,lc_working,window_length=half_window*120/3600/24,method='median',return_trend=True)
+                if half_window % 2 == 0:
+                    window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window+1)
+                else:
+                    window_median = scipy.signal.medfilt(lc_sine, kernel_size=half_window)
 
                 if plot_results == True:
                     plot_t = orbit_t[orbit_mask]
@@ -198,29 +243,26 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
                     mask = plot_mask & orbit_mask
                     fig = plt.figure(figsize=(10,5))
                     plt.errorbar(orbit_t[mask], lc_sine[mask], yerr=lc_errs_sine[mask], fmt='.')
-                    plt.xlabel('Time (BJD - 2,7457,000)')
+                    plt.xlabel('Time (TBJD - 2,457,000)')
                     plt.ylabel('Normalised And Flattened flux')
                     plt.plot(orbit_t[mask], window_median[mask], c='orange', zorder=3, linewidth=3)
+                    plt.plot(orbit_t[mask], sine_trend[mask], c='red', zorder=2, linewidth=3)
                     plt.show()
-                    plt.close()
-
-                # --- accumulate this pass's trend into the running total for this orbit ---
-                full_sine_trend[orbit_mask] = full_sine_trend[orbit_mask] * window_median[orbit_mask]
-
-                # --- apply the flatten unconditionally ---
                 lc_sine[orbit_mask] = lc_sine[orbit_mask] / window_median[orbit_mask]
                 lc_errs_sine[orbit_mask] = lc_errs_sine[orbit_mask] / window_median[orbit_mask]
-
-        sine_trend = full_sine_trend
         #     # print(sine_trend)
-        # lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
+        #build lc_flat only after the correction loop above has actually run, so it
+        #reflects the corrected lc_sine/lc_errs_sine -- building it before the loop (as
+        #this used to) froze a copy of the pre-correction values, so periodogram=[...]
+        #silently returned the same flux as short_window alone even once the loop ran
+        lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
     if short_window == None:
         return orbit_t, lc_quad, periodic
     elif periodogram == None:
         return orbit_t, lc_quad, lc_wotan, periodic
     else:
-        lc_flat = np.array([lc_sine, lc_errs_sine, sine_trend])
         return orbit_t, lc_quad, lc_wotan, lc_flat, periodic
+    
     
 
 ############### Flare Masking ###############
@@ -230,14 +272,17 @@ def flatten(lc_t, raw_lc, raw_lc_errs, plot_results=False, short_window=None, pe
 # The mask of the flare durations then includes data points 2*mask_extra after
 # the TOFFEE-identified end, and 0.5*mask_extra before the start.
 def make_flare_mask(lc_t, benchmark, data_min = 15):
-    days2sec = 86400
-    #calculate the cadence
+    #calculate the cadence. np.diff of the time array is already in days, the
+    #same units as the flare start/end times, so no unit conversion is needed.
     cadence = np.median(np.diff(lc_t))
+    #the padding either side of a flare is half its duration, but never less
+    #than data_min cadences worth of time
+    min_extra = data_min * cadence
     flare_mask = np.full(len(lc_t), True)
     for ii in range(0, len(benchmark)):
         flare_dur = benchmark.iloc[ii]["T_end"] - benchmark.iloc[ii]["T_start"]
-        if 0.5*flare_dur < data_min * cadence/days2sec:
-            mask_extra = data_min * cadence/days2sec
+        if 0.5*flare_dur < min_extra:
+            mask_extra = min_extra
         else:
             mask_extra = 0.5*flare_dur
 
@@ -503,18 +548,21 @@ def spot_mod(lc_t, lc_flux, lc_errs, benchmark, plot=False, params=None, rand=Fa
     return flare_spot, flare_spot_left, flare_spot_right, np.array(red_chi2).T, spot_exists, spot_agreement
 
 
-def get_rot_period(lc_t, lc_flux, lc_errs, benchmark=None):
-    ######## PLACEHOLDER: INSERT TOFFEE FLATTEN FUNCTION ##########
-    flat_t, flat_flux, flat_errs = np.full(len(lc_t), True), np.full(len(lc_t), True), np.full(len(lc_t), True)
+def get_rot_period(lc_t, lc_flux, lc_errs, benchmark=None, short_window = 0.25, periodogram = [0.1, 10]):
+    t, lc_quad, lc_wotan, lc_flat, periodic = flatten(lc_t, lc_flux, lc_errs,
+                                                        short_window=short_window, periodogram = periodogram)
+    flat_t, flat_flux, flat_errs = t, lc_flat[0], lc_flat[1]
 
-    if benchmark:
+    if benchmark is not None:
         spot_mask = make_flare_mask(flat_t, benchmark)
     else:
-        ### Replace with flare detection output
-        spot_mask = np.full(len(flat_t), True)
+        ### If no benchmark is passed we run basic detection with defaul parameters
+        benchmark = detect_flares(flat_t, flat_flux, flat_errs, np.full(len(lc_t), 0))
+        spot_mask = make_flare_mask(flat_t, benchmark)
 
     # Conduct a LS over the lightcurve with flares masked
     full_ls = LombScargle(flat_t[spot_mask], flat_flux[spot_mask], flat_errs[spot_mask])
+    frequency = np.linspace(1/7, 1/0.1, 100000)
     power = full_ls.power(frequency)
     prob_false = full_ls.false_alarm_probability(power.max())
     full_peak_freq = frequency[np.where(power==power.max())[0][0]]
@@ -558,9 +606,11 @@ def break_finder(time, flux, min_break = 0.25):
 
 
 
-
-
 def light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200):
+
+    if clip_breaks == None:
+        return np.full(len(time), 1, dtype = bool)
+    
     #####################find the breaks###################
     #Use breakfinder to find the break(s) from TESS sector and clip off cadences
     #from either side of the breaks
@@ -656,6 +706,41 @@ def light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200):
     if clip_end == True:
         light_curve_break_mask[len(time) - clip_breaks:len(time)] = False
     return light_curve_break_mask
+
+
+def quality_filter(time, flux, flux_err, quality, flag_values = [0]):
+    '''Function to filter out poor quality cadences from the lightcurve. This is important for ensuring that
+    the flare detection is not contaminated by poor quality data. The default is to only keep cadences with a
+    quality flag of 0, which corresponds to perfect quality. However, some studies have shown that points with
+    a quality flag of 512 can correspond to the peaks of flares and so can be kept in. For that you can pass
+    flag_values = [0, 512] to keep those points as well.
+
+    Inputs:
+    time: 1D array of time coordinates of the lightcurve
+    flux: 1D array of flux values of the lightcurve
+    flux_err: 1D array of flux error values of the lightcurve
+    quality: 1D array of quality flags of the lightcurve
+    flag_values: List of acceptable quality flag values to keep in the analysis
+
+    Returns:
+    time_filtered: 1D array of time coordinates after filtering
+    flux_filtered: 1D array of flux values after filtering
+    flux_err_filtered: 1D array of flux error values after filtering
+    quality_filtered: 1D array of quality flags after filtering
+    '''
+    if flag_values == None:
+        return time, flux, flux_err, quality
+
+    # Create a boolean mask for the acceptable quality flags
+    mask = np.isin(quality, flag_values)
+    
+    # Apply the mask to filter the arrays
+    time_filtered = time[mask]
+    flux_filtered = flux[mask]
+    flux_err_filtered = flux_err[mask]
+    quality_filtered = quality[mask]
+    
+    return time_filtered, flux_filtered, flux_err_filtered, quality_filtered
 
 
 #Input lightcurve information and get out times and fluxes of bright points
@@ -919,7 +1004,7 @@ def declare_flare(time, flux, time_candidate, flux_std, threshold_std, num_conse
         flare_start = time[index_start]
         flare_end = time[index_end]
         flare_amp = flux[time_peak_flare_index] - 1
-        flare_ED = np.trapz(flux[index_start:index_end+1] - 1, x = time[index_start:index_end+1])
+        flare_ED = _trapezoid(flux[index_start:index_end+1] - 1, x = time[index_start:index_end+1])
         #covert to seconds
         days_to_seconds = 86400
         flare_ED = flare_ED * 86400
@@ -956,6 +1041,17 @@ def model_fit(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0, np.in
                 they're defined in the original func
     perr: error on the parameter estimates, again listed in the order as they're defined in the original func
     '''
+    #Using least_squares requires there to be no nan values. As a redundancy check let's remove the nan values
+    #in the flux and flux_err from the fitting
+    if flux_err is not None:
+        mask = (~np.isnan(flux)) & (~np.isnan(flux_err))
+        flux, flux_err = flux[mask], flux_err[mask]
+    else:
+        mask = ~np.isnan(flux)
+        flux = flux[mask]
+
+    if mask.sum() == 0:
+        raise ValueError("No finite data points available to fit — flare window is entirely NaN. Try dropping NaN flux and/or flux_err values.")
 
     #We have the function for the model, but we need to calculate
     #The residuals that will be minimized in the least squares
@@ -987,17 +1083,6 @@ def model_fit(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0, np.in
     pcov = np.dot(vt.T / s**2, vt)
     perr = np.sqrt(np.diag(pcov))
     return params_opt, perr
-
-
-#find the residuals between the best fit function and the flux points
-def flare_residuals(func, time, flux, flux_err, p0, loss = 'huber', bounds = (0, np.inf)):
-    #run best fit
-    params_opt = model_fit(func, time, flux, flux_err, p0, loss = loss, bounds = bounds)[0]
-    #find model fluxes
-    model_fluxes = func(time, *params_opt)
-    #find residuals
-    residuals = flux - model_fluxes
-    return residuals
 
 
 #find the residuals between the best fit function and the flux points
@@ -1045,7 +1130,7 @@ def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber', bou
         return alpha * np.exp(-(x - flare_peak_time)**2 / (2 * (sigma)**2)) + c
 
     #set initial guesses for guassian rise
-    alpha_i = flux[-1]
+    alpha_i = flux[-1] - 1
     sigma_i = (time[-1] - time[0])/2
     c_i = 1
     
@@ -1055,14 +1140,9 @@ def fit_gaussian_rise(time, flux, flux_err, flare_peak_time, loss = 'huber', bou
     if bounds != None:
         p0 = adjust_bounds(p0, bounds)
 
-    #set sigma of the peak point to be super small for force fit to go through it
-    sigma = flux_err
-    #sigma[-1] = sigma[-1] * 1e-3 #make super small
-    #sigma[0] = sigma[0] * 1e-3
-
     #fit for parameters and residuals
-    params_opt, perr = model_fit(guassian_rise, time, flux, sigma, p0, loss = loss, bounds = bounds)
-    residuals = flare_residuals(guassian_rise, time, flux, sigma, p0, loss = loss, bounds = bounds)
+    params_opt, perr = model_fit(guassian_rise, time, flux, flux_err, p0, loss = loss, bounds = bounds)
+    residuals = flare_residuals(guassian_rise, time, flux, flux_err, p0, loss = loss, bounds = bounds)
     return params_opt, perr, residuals
 
 # First, create one for double exponential decay
@@ -1089,14 +1169,9 @@ def fit_dbl_exp_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', bou
     if bounds != None:
         p0 = adjust_bounds(p0, bounds)
 
-    #set sigma of the first point to be super small for force fit to go through it
-    sigma = flux_err
-    #sigma[0] = sigma[0] * 1e-3 #make super small
-    #sigma[-1] = sigma[-1] * 1e-3
-    
     #fit for parameters and residuals
-    params_opt, perr = model_fit(dbl_exp_decay, time, flux, sigma, p0, loss = loss, bounds = bounds)
-    residuals = flare_residuals(dbl_exp_decay, time, flux, sigma, p0, loss = loss, bounds = bounds)
+    params_opt, perr = model_fit(dbl_exp_decay, time, flux, flux_err, p0, loss = loss, bounds = bounds)
+    residuals = flare_residuals(dbl_exp_decay, time, flux, flux_err, p0, loss = loss, bounds = bounds)
     #done
     return params_opt, perr, residuals
 
@@ -1128,14 +1203,9 @@ def fit_w_gompertz_decay(time, flux, flux_err, flare_peak_time, loss = 'huber', 
         p0_prd_gomp = adjust_bounds(p0_prd_gomp, bounds)
     
 
-    #set sigma of the first point to be super small for force fit to go through it
-    sigma = flux_err
-    #sigma[0] = sigma[0] * 1e-3 #make super small
-    #sigma[-1] = sigma[-1] * 1e-3
-
     #fit for parameters and residuals
-    params_opt, perr = model_fit(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
-    residuals = flare_residuals(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
+    params_opt, perr = model_fit(product_gompertz, time, flux, flux_err, p0_prd_gomp, loss = loss, bounds = bounds)
+    residuals = flare_residuals(product_gompertz, time, flux, flux_err, p0_prd_gomp, loss = loss, bounds = bounds)
     #done
     return params_opt, perr, residuals
 
@@ -1166,14 +1236,9 @@ def fit_w_gompertz_logistic(time, flux, flux_err, flare_peak_time, loss = 'huber
     if bounds != None:
         p0_prd_gomp = adjust_bounds(p0_prd_gomp, bounds)
 
-    #set sigma of the first point to be super small for force fit to go through it
-    sigma = flux_err
-    #sigma[0] = sigma[0] * 1e-3 #make super small
-    #sigma[-1] = sigma[-1] * 1e-3
-
     #fit for parameters and residuals
-    params_opt, perr = model_fit(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
-    residuals = flare_residuals(product_gompertz, time, flux, sigma, p0_prd_gomp, loss = loss, bounds = bounds)
+    params_opt, perr = model_fit(product_gompertz, time, flux, flux_err, p0_prd_gomp, loss = loss, bounds = bounds)
+    residuals = flare_residuals(product_gompertz, time, flux, flux_err, p0_prd_gomp, loss = loss, bounds = bounds)
     #done
     return params_opt, perr, residuals
 
@@ -1306,7 +1371,7 @@ def robust_fitting(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds
     #Check whether we're doing super fitting and fitting gompertz decay and double exponential
     #both with and without the peaks. Four total fittings
     if super_robust == True:
-        params_opt, perr, residuals = super_fitting(time, flux, flux_err, flare_peak_time, loss = 'huber', bounds = None, p0 = None)
+        params_opt, perr, residuals = super_fitting(time, flux, flux_err, flare_peak_time, loss=loss, bounds=bounds, p0=p0)
         return params_opt, perr, residuals
     
     #second, check if we're fitting the peak at all
@@ -1388,12 +1453,12 @@ def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, d
             #The exact start, end, peak time need to be found later with the known peak time
             #And whether this flare has been found to the left or right of the peak
             #these starts and ends are indices in the residuals and are thus relative to the peak index
-            flare_peaks.append(np.argmax(epoch))
+            flare_peaks.append(epoch[np.argmax(residuals[epoch])])
             flare_starts.append(min(epoch))
             flare_ends.append(max(epoch))
             #But we can find the non-time related quantities easily!
             flare_amps.append(max(residuals[epoch]))
-            flare_ED = np.trapz(residuals[epoch], x = np.arange(0, len(epoch) * dt, dt))
+            flare_ED = _trapezoid(residuals[epoch], x = np.arange(0, len(epoch) * dt, dt))
             #covert to seconds
             days_to_seconds = 86400
             flare_ED = flare_ED * 86400
@@ -1431,6 +1496,7 @@ def find_secondaries(residuals, flux_std, secondary_threshold, num_consec_sec, d
     #If no flare was found then return a false reading
     else:
         return False
+
 
 
 def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, secondary_threshold = 3.0,
@@ -1504,23 +1570,13 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
 
     ######REMOVE THE LOW QUALITY POINTS######
     #perfect points is the quality mask only containing cadences with the desired quality flag(s)
-    perfect_points = []
+    time, flux, flux_err, quality = quality_filter(time, flux, flux_err, quality, flag_values = flag_values)
 
-    #loop through quality of points
-    for q in quality:
-        #if the quality of this cadence is acceptable
-        if q in flag_values:
-            #don't mask out
-            perfect_points.append(True)
-        else:
-            #mask out poor points
-            perfect_points.append(False)
-
-    #unpack good values of flux and time for the star
-    flux = flux[perfect_points]
-    time = time[perfect_points][np.isnan(flux) == False]
-    flux_err = flux_err[perfect_points][np.isnan(flux) == False]
-    flux = flux[np.isnan(flux) == False]
+    #remove any NaN values
+    finite_values = np.isfinite(time) & np.isfinite(flux) & np.isfinite(flux_err)
+    time = time[finite_values]
+    flux_err = flux_err[finite_values]
+    flux = flux[finite_values]
     
     ######CLIP OFF THE BREAKS######
 
@@ -1642,11 +1698,13 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
             peaks, starts, ends, sec_amps, flare_EDs, flare_types, num_points, num_abv_thresh, amp_sigmas = sec_results
             #Still need to shift the peak, start and end times to the correct times. The values above are only
             #the indices in the residuals
-            peaks = flare_peak_index - len(rise_residuals) + peaks
+            #len(rise_residuals) counts the peak cadence as well, so subtracting it on its own
+            #lands one cadence before the start of the rise, hence the extra +1
+            peaks = flare_peak_index - len(rise_residuals) + 1 + peaks
             peaks = time[peaks]
-            starts = flare_peak_index - len(rise_residuals) + starts
+            starts = flare_peak_index - len(rise_residuals) + 1 + starts
             starts = time[starts]
-            ends = flare_peak_index - len(rise_residuals) + ends
+            ends = flare_peak_index - len(rise_residuals) + 1 + ends
             ends = time[ends]
 
             #Additional Detail, subtract these EDs from the primary
@@ -1696,7 +1754,7 @@ def detect_flares(time, flux, flux_err, quality, primary_threshold = 3.0, second
     
             #Additional Detail, subtract these EDs from the primary
             #A bit tougher now, find the last thing labeled a primary
-            last_prim = [primary_or_secondary == 'primary'][-1]
+            last_prim = np.where(np.array(primary_or_secondary) == 'primary')[0][-1]
             flare_equivalent_durations[last_prim] = flare_equivalent_durations[last_prim] - np.sum(flare_EDs)
     
             #Add these flares to the total
@@ -1758,11 +1816,22 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                min_break = 0.25, clip_breaks = 200, flag_values = [0],
                primary_color = 'red', secondary_color = 'blue', tertiary_color = 'green', cadence_color = 'black',
                fontsize = 24, labelsize = 18, Target = None, Sector = None):
+    
 
-    mask = light_curve_mask(time, flux, min_break = 0.25, clip_breaks = 200)
+    #############PREPARE THE LIGHTCURVE FOR ANALYSIS#############
+    #Clip low quality points and mask out breaks in the lightcurve
+    time, flux, flux_err, quality = quality_filter(time, flux, flux_err, quality, flag_values = flag_values)
+    #clip_breaks = None means the caller does not want any clipping, which is how
+    #detect_flares reads it too, so keep every cadence in that case
+    if clip_breaks != None:
+        mask = light_curve_mask(time, flux, min_break = min_break, clip_breaks = clip_breaks)
+    else:
+        mask = np.full(len(time), True)
+    #Define standard deviation
+    time, flux, flux_err, quality = time[mask], flux[mask], flux_err[mask], quality[mask]
     flux_std = np.nanpercentile(flux - 1, 84)
     
-    #find flares
+    #find flares, skip checking the flags, we just did it
     flare_results = detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
                                   secondary_threshold = secondary_threshold,
                                   num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
@@ -1771,7 +1840,7 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
                                   fit_multiple_secs = fit_multiple_secs,
                                   prim_marginal_threshold = prim_marginal_threshold,
                                   num_below_threshold = num_below_threshold,
-                                  min_break = min_break, clip_breaks = clip_breaks, flag_values = flag_values)
+                                  min_break = min_break, clip_breaks = None, flag_values = None)
     
     #flare peak times
     flare_peak_times = flare_results['T_peak']
@@ -1860,10 +1929,9 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
     
     #First plot: Show the flattened lightcurve with the flares found and colored in
     plt.figure(figsize = (10,8))
-    plt.scatter(time, flux, s = 6, color = 'gray')
     #plot all the good flux points not masked 
     
-    plt.scatter(time[mask], flux[mask], s = 6, color = cadence_color, label = 'Used')
+    plt.scatter(time, flux, s = 6, color = cadence_color, label = 'Used')
     #the plot for the residual periodogram result
     #plt.plot(time, flatt_trend, color = 'yellow')
     
@@ -1888,6 +1956,8 @@ def visualizer(time, flux, flux_err, quality, primary_threshold = 3.0, secondary
     plt.tick_params(direction = 'in', labelsize = 20, width = 3, length = 10, labelfontfamily = 'Serif')
     #plt.title('TIC ' + str(TIC_number) + ' Sector ' + str(TESS_sector), fontsize = 24)
     plt.show()
+    #release the figure once it has been drawn, so a loop over many light curves
+    #does not accumulate every figure it has ever made in memory
     plt.close()
     
     #################PRINT FLARE MORPHOLOGY AND FITTING#################
@@ -2240,3 +2310,461 @@ def flare_energy_calc(star_luminosity, equivalent_duration):
     #equation used in Howard and MacGregor 2022
     flare_energy = equivalent_duration * star_luminosity
     return flare_energy
+
+
+
+# To keep things simple we simply input the time, the flux, and the output of the flare detection code which is a pandas dataframe
+def red_noise_smoothing(time, flux, flare_frame, clip_amp = 5,
+                        window_length = 0.1, break_tolerance = 0, method = 'biweight', fill_gaps = 'raw'):
+    #Step 1: Clip the large amplitude flares with amplitudes (measured in σ) above clip_amp
+    large_flare = np.where((flare_frame['Amp_Sigma'] > clip_amp))[0]
+
+    #Mask of the flares we want wotan to skip over in fitting
+    lightcurve_mask = np.full(len(time), 0, dtype = bool)
+
+    for i in large_flare:
+        flare_times = (time >= flare_frame['T_start'].iloc[i]) & (time <= flare_frame['T_end'].iloc[i])
+        lightcurve_mask[flare_times] = True
+
+    #Step 2: Detrend with Wotan
+    flatten_lc, trend_lc = wotan.flatten(time, flux, mask = lightcurve_mask,
+                            window_length = window_length, break_tolerance = break_tolerance,
+                            method = method, return_trend=True)
+
+    #Step 3: Fix cadences where wotan had no valid data within the window to fit a trend
+    nan_mask = ~np.isfinite(trend_lc)
+ 
+    if np.any(nan_mask):
+        if fill_gaps == 'raw':
+            #keep the original (pre-smoothing) flux where no trend could be computed
+            flatten_lc[nan_mask] = flux[nan_mask]
+        elif fill_gaps == 'interpolate':
+            #bridge the gap by linearly interpolating the trend from its nearest valid neighbors on
+            #either side, equivalent to widening the window only across the mask
+            valid = np.isfinite(trend_lc)
+            trend_lc[nan_mask] = np.interp(time[nan_mask], time[valid], trend_lc[valid])
+            flatten_lc[nan_mask] = flux[nan_mask] / trend_lc[nan_mask]
+        else:
+            raise ValueError("fill_gaps must be 'raw' or 'interpolate'")
+
+    #return the flattened light curve
+    return flatten_lc, trend_lc
+
+
+
+def lightcurve_quality(flux, flux_err):
+    # The reciprocal quality measurement in Feinstein_Flattened_Lightcurve_Quality.csv:
+    # TOFFEE's sigma of the flattened photometry over the typical error bar.
+    # Changed from the paper definition to be more interpretable, lower values are poorly
+    # Detrended light curved, higher values are better/flatter
+    return np.nanmedian(flux_err) / np.nanpercentile(flux - 1, 84)
+
+
+def match_flares(before, after, cadence = 120):
+    ########################## Argument Info ########################
+    # before/after are detect_flares frames from the two rounds
+    # cadence is the cadence of the light curve in seconds, used to set a tolerance for matching flares
+    #################################################################
+    # Fraction of the 'before' flares that survive into 'after'. Matched on
+    # overlap of the T_start -> T_end windows rather than on peak time:
+    # re-detecting a flare on a rebaselined light curve routinely moves the
+    # fitted peak by a couple of cadences, so a peak-time match counts flares
+    # as lost when they are still there with a slightly different fit.
+    # Calculate the tolerance in days given the arg is in seconds
+    tolerance = cadence / (24 * 60 * 60)
+    if len(before) == 0:
+        return np.nan, np.array([], dtype=bool)
+    if len(after) == 0:
+        return 0.0, np.zeros(len(before), dtype=bool)
+    starts, ends = after['T_start'].values, after['T_end'].values
+    kept = np.array([np.any((starts <= t_end + tolerance) & (ends >= t_start - tolerance))
+                     for t_start, t_end in zip(before['T_start'].values,
+                                               before['T_end'].values)])
+    return kept.mean(), kept
+
+
+
+def pair_flares(before, after, cadence = 120):
+    # Calculate the tolerance in days given the arg is in seconds
+    tolerance = cadence / (24 * 60 * 60)
+    # For each 'before' flare, the index of the overlapping 'after' flare with
+    # the largest overlap, or -1 if none overlaps.
+    pairs = np.full(len(before), -1, dtype=int)
+    if len(before) == 0 or len(after) == 0:
+        return pairs
+    a_start, a_end = after['T_start'].values, after['T_end'].values
+    for i, (b_start, b_end) in enumerate(zip(before['T_start'].values,
+                                             before['T_end'].values)):
+        overlap = (np.minimum(a_end, b_end + tolerance) -
+                   np.maximum(a_start, b_start - tolerance))
+        if np.max(overlap) > 0:
+            pairs[i] = int(np.argmax(overlap))
+    return pairs
+
+
+
+def load_and_flatten(time, flux, flux_err, quality,
+                     #Light curve prep 
+                     flag_values = [0],
+                     #Detrending 
+                     short_window=0.25, periodogram=[0.1, 10]):
+    
+    time, flux, flux_err, quality = quality_filter(time, flux, flux_err, quality, flag_values = flag_values)
+
+    if len(flux) == 0:
+        raise LightCurveError('no cadences survived the quality filter with flag_values = %s'
+                              % (flag_values,))
+    if np.min(flux) <= 0:
+        raise LightCurveError('the flux contains values at or below zero, so it cannot be '
+                              'normalised; the minimum value is %g' % np.min(flux))
+
+    out = flatten(time, flux, flux_err, plot_results=False,
+                         short_window=short_window, periodogram=periodogram)
+    if periodogram is not None:
+        t, lc_flat = out[0], out[3]
+    else:
+        t, lc_flat = out[0], out[2]
+    return t, lc_flat[0], lc_flat[1]
+
+
+
+def flatten_detect_smooth(time, flux, flux_err, quality,
+                          #Light Curve prep Args
+                          flag_values = [0], min_break = 0.25, clip_breaks = 200,
+                          #Detrending Args
+                          short_window=0.25, periodogram=[0.1, 10],
+                          #Detection Args
+                          primary_threshold = 3.0, secondary_threshold = 3.0,
+                            num_consec = 3, num_consec_sec = 3, loss = 'huber',
+                            rise_bounds = None, rise_func = 'gaussian',
+                            decay_func = 'dbl_exp_decay', fit_peak = False, p0_decay = None, decay_bounds = None,
+                            fit_multiple_secs = True,
+                            prim_marginal_threshold = 3.0, num_below_threshold = 3,
+                        #Red Noise Smoothing Args
+                        window = 0.1, clip_amp = 5.0, break_tolerance = 0.1, method = 'biweight', fill_gaps = 'raw'):
+    
+    # Everything for one light curve: the flattened photometry, the first round
+    # flares, the smoothed photometry and which first round flares survived.
+
+    #############PREPARE THE LIGHTCURVE FOR ANALYSIS#############
+    #Clip low quality points and mask out breaks in the lightcurve
+    time, flux, flux_err, quality = quality_filter(time, flux, flux_err, quality, flag_values = flag_values)
+    mask = light_curve_mask(time, flux, min_break = min_break, clip_breaks = clip_breaks)
+    time, flux, flux_err, quality = time[mask], flux[mask], flux_err[mask], quality[mask]
+    #Unpack Cadence
+    cadence = np.nanmedian(np.diff(time)) * 24 * 60 * 60 #in seconds, used for matching flares between the first and second pass
+
+    unpacked = load_and_flatten(time, flux, flux_err, quality,
+                     #Light curve prep 
+                     flag_values = None,
+                     #Detrending 
+                     short_window= short_window, periodogram = periodogram)
+    
+    time, flux, flux_err = unpacked
+    #Add quality filter to be zeros, we already filtered
+    quality = np.zeros(len(time))
+    
+    #find flares, skip checking the flags, we just did it
+    #This will constitute the first pass of detection
+    flares_first = detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
+                                  secondary_threshold = secondary_threshold,
+                                  num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                                  rise_bounds = rise_bounds, rise_func = rise_func,
+                                  decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay, decay_bounds = decay_bounds,
+                                  fit_multiple_secs = fit_multiple_secs,
+                                  prim_marginal_threshold = prim_marginal_threshold,
+                                  num_below_threshold = num_below_threshold,
+                                  min_break = min_break, clip_breaks = None, flag_values = None)
+
+    #Run the red noise smoothing, clipping large flares and running aggressive detrending
+    smoothed_flux, _ = red_noise_smoothing(
+        time, flux, flares_first, clip_amp= clip_amp, window_length=window,
+        break_tolerance=break_tolerance, method=method, fill_gaps = fill_gaps)
+    
+    keep = np.isnan(smoothed_flux) == False
+    flares_second = detect_flares(time[keep], smoothed_flux[keep], flux_err[keep], quality[keep], primary_threshold = primary_threshold,
+                                  secondary_threshold = secondary_threshold,
+                                  num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                                  rise_bounds = rise_bounds, rise_func = rise_func,
+                                  decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay, decay_bounds = decay_bounds,
+                                  fit_multiple_secs = fit_multiple_secs,
+                                  prim_marginal_threshold = prim_marginal_threshold,
+                                  num_below_threshold = num_below_threshold,
+                                  min_break = min_break, clip_breaks = None, flag_values = None)
+    
+    _, recovered = match_flares(flares_first, flares_second, cadence = cadence) #Flares in the first pass that were recovered in the second pass
+    dropped = ~recovered
+    _, survived = match_flares(flares_second, flares_first, cadence = cadence) #Flares in the second pass that were recovered from the first pass
+    new = ~survived
+
+    result = dict(time=time, flux=flux, flux_err=flux_err,
+                  smoothed=smoothed_flux, keep=keep, first=flares_first,
+                  second=flares_second, recovered=recovered, dropped=dropped, new = new)
+    return result
+
+
+
+def plot_example(time, flux, flux_err, quality, 
+                 #Detrending Args
+                 flag_values = [0], short_window=0.25, periodogram=[0.1, 10],
+                 #Detection Args
+                 primary_threshold = 3.0, secondary_threshold = 3.0,
+                  num_consec = 3, num_consec_sec = 3, loss = 'huber',
+                  rise_bounds = None, rise_func = 'gaussian',
+                  decay_func = 'dbl_exp_decay', fit_peak = False, p0_decay = None, decay_bounds = None,
+                  fit_multiple_secs = True,
+                  prim_marginal_threshold = 3.0, num_below_threshold = 3,
+                  min_break = 0.25, clip_breaks = 200,
+                #Red Noise Smoothing Args
+                clip_amp = 5.0, break_tolerance = 0.1, method = 'biweight', fill_gaps = 'raw',
+                #Plotting Args
+                windows=(0.03, 0.05, 0.10), savepath=None, target = None, sector = None
+                 ):
+
+    # Full light curve before and after smoothing, as in Red_Noise_Elimination.
+    unpacked = load_and_flatten(time, flux, flux_err, quality, flag_values = flag_values, short_window=short_window, periodogram=periodogram)
+    time, flux, flux_err = unpacked
+    #Add quality filter to be zeros, we already filtered
+    quality = np.zeros(len(time))
+    #First round of detections
+    flares_first = detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
+                                      secondary_threshold = secondary_threshold,
+                                      num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                                      rise_bounds = rise_bounds, rise_func = rise_func,
+                                      decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay, decay_bounds = decay_bounds,
+                                      fit_multiple_secs = fit_multiple_secs,
+                                      prim_marginal_threshold = prim_marginal_threshold,
+                                      num_below_threshold = num_below_threshold,
+                                      min_break = min_break, clip_breaks = clip_breaks, flag_values = None)
+
+    fig, axs = plt.subplots(len(windows) + 1, 1,
+                            figsize=(14, 3 * (len(windows) + 1)), sharex=True)
+    ax = axs[0]
+    ax.errorbar(time, flux, flux_err, fmt='.', color='black', ms=2, lw=0.5)
+    if target is not None and sector is not None:
+        name = 'TIC %s, Sector %d' % (target, sector)
+    else:
+        name = 'Light curve'
+    ax.set_title('%s  before smoothing, quality %.3f, %d flares'
+                 % (name, lightcurve_quality(flux, flux_err), len(flares_first)))
+
+    for ax, window in zip(axs[1:], windows):
+        smoothed_flux, trend_lc = red_noise_smoothing(
+            time, flux, flares_first, clip_amp=clip_amp, window_length=window,
+            break_tolerance=break_tolerance, method=method, fill_gaps = fill_gaps)
+        keep = np.isnan(smoothed_flux) == False
+        time_smooth, flux_smooth, err_smooth = time[keep], smoothed_flux[keep], flux_err[keep]
+        flares_second = detect_flares(time_smooth, flux_smooth, err_smooth, quality[keep], primary_threshold = primary_threshold,
+                                              secondary_threshold = secondary_threshold,
+                                              num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                                              rise_bounds = rise_bounds, rise_func = rise_func,
+                                              decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay, decay_bounds = decay_bounds,
+                                              fit_multiple_secs = fit_multiple_secs,
+                                              prim_marginal_threshold = prim_marginal_threshold,
+                                              num_below_threshold = num_below_threshold,
+                                              min_break = min_break, clip_breaks = clip_breaks, flag_values = None)
+        
+        ax.errorbar(time_smooth, flux_smooth, err_smooth, fmt='.', color='black', ms=2, lw=0.5)
+        ax.plot(time_smooth, trend_lc[keep], linewidth = 2, color ='red')
+        ax.set_title('window_length = %.3f d, quality %.3f, %d flares'
+                     % (window, lightcurve_quality(flux_smooth, err_smooth), len(flares_second)))
+
+    fig.supxlabel('Time (days)')
+    fig.supylabel('Detrended flux')
+    fig.tight_layout()
+    if savepath is not None:
+        fig.savefig(savepath, dpi=110, bbox_inches='tight')
+    return fig
+
+
+def add_square_index(flares, cadence = 120):
+    #cadence is given in seconds, convert to days for the square index calculation
+    cadence = cadence / (24 * 60 * 60)
+    # The square index from the false positive work: duration over amplitude,
+    # plus the gap-corrected version built from the point count.
+    flares = flares.copy()
+    flares['Duration'] = flares['T_end'] - flares['T_start']
+    flares['Coverage'] = flares['Num_Points'] / (flares['Duration'] / cadence + 1)
+    flares['Log_Square_Index'] = np.log10(flares['Duration'] / flares['Amplitude'])
+    flares['Log_Square_Index_Obs'] = np.log10(flares['Num_Points'] * cadence
+                                              / flares['Amplitude']) #Good for identifying signals that straddle orbit breaks
+    return flares
+
+
+def select_by_square_index(catalogue, log_si_min=-np.inf, log_si_max=np.inf,
+                           kind=None, column='Log_Square_Index_Obs',
+                           min_coverage=None):
+    ########################## Argument Info ########################
+    # cat is the catalogue from load_catalogue
+    # log_si_min/log_si_max bound the square index column (the histogram axis)
+    # kind is None (keep all) or 'primary'/'secondary'/'tertiary', or a list
+    # column defaults to the gap-corrected 'Log_Square_Index_Obs' rather than
+    #   'Log_Square_Index', because the raw index counts any data gap inside the
+    #   flare window as part of the duration and so reads far too high for the
+    #   ~2% of flares whose window straddles a downlink gap
+    # min_coverage, if set, drops flares whose window straddles a data gap
+    #################################################################
+    # Every column below is produced by add_square_index, so say so plainly
+    # rather than letting pandas raise a bare KeyError on whichever one is hit first
+    for required_column in ('Duration', 'Coverage', 'Log_Square_Index', 'Log_Square_Index_Obs'):
+        if required_column not in catalogue.columns:
+            raise KeyError('%s is missing, run add_square_index on the catalogue first'
+                           % required_column)
+
+    # Boolean-mask the catalogue down to a square index window.
+    mask = (catalogue[column] >= log_si_min) & (catalogue[column] <= log_si_max)
+    if kind is not None:
+        kinds = [kind] if isinstance(kind, str) else list(kind)
+        mask = mask & catalogue['Primary_or_Secondary'].isin(kinds)
+    if min_coverage is not None:
+        mask = mask & (catalogue['Coverage'] >= min_coverage)
+    return catalogue[mask]
+
+
+def square_index_visualizer(time, flux, flux_err, quality,
+                            #SQUARE INDEX SELECTION
+                            log_si_min = -np.inf, log_si_max = np.inf,
+                            kind = None, column = 'Log_Square_Index_Obs',
+                            min_coverage = None, cadence = None,
+                            #ALREADY DETECTED FLARES
+                            flares = None,
+                            #LIGHTCURVE PREP
+                            flag_values = [0], min_break = 0.25, clip_breaks = 200,
+                            #DETECTION
+                            primary_threshold = 3.0, secondary_threshold = 3.0,
+                            num_consec = 3, num_consec_sec = 3, loss = 'huber',
+                            #FLARE MODELING
+                            rise_bounds = None, rise_func = 'gaussian',
+                            decay_func = 'dbl_exp_decay', fit_peak = False,
+                            p0_decay = None, decay_bounds = None, fit_multiple_secs = True,
+                            #SETTING BEGINNING AND END TIMES OF FLARES
+                            prim_marginal_threshold = 3.0, num_below_threshold = 3,
+                            #PLOTTING
+                            pad_factor = 1.5, plot = True, ncols = 3, panel_size = (4.8, 3.4),
+                            fontsize = 10, primary_color = 'red', cadence_color = 'black',
+                            savepath = None, target = None, sector = None):
+    '''Plot only the flares in one lightcurve whose square index falls in a given window,
+    so a sample of boxy detections can be inspected by eye without hunting through every
+    flare. Built to be dropped straight into a loop over lightcurves: nothing is plotted
+    for a lightcurve that has no flares in the window, so a run over many targets shows
+    only the ones worth looking at.
+
+    Inputs:
+    time, flux, flux_err, quality: the DETRENDED lightcurve arrays, as handed to
+                                   detect_flares
+    log_si_min, log_si_max: the square index window to plot, in log10. Flares outside it
+                            are found but not drawn
+    kind, column, min_coverage: passed to select_by_square_index
+    cadence: the cadence in SECONDS. Left as None it is measured from the time array,
+             which is what makes this work on 20 second and FFI data as well
+    flares: an already detected flare frame for this lightcurve. Left as None the
+            detection is run here, so a caller inside a loop can hand over the frame it
+            already has instead of paying for detection twice
+    pad_factor: how much of the surrounding lightcurve to show either side of a flare, as
+                a multiple of its duration
+    plot: set False to select the flares without drawing anything
+    target, sector: used to title the figure, both needed for the title to name the star
+    Every other argument is passed through to detect_flares.
+
+    Returns:
+    selection: the flares that fall in the square index window, with the square index
+               columns added. Empty if this lightcurve has none
+
+    Raises:
+    LightCurveError: if the lightcurve holds no usable cadences
+    '''
+    #################PREPARE THE LIGHTCURVE#################
+    time, flux, flux_err, quality = quality_filter(time, flux, flux_err, quality, flag_values = flag_values)
+    if len(time) == 0:
+        raise LightCurveError('no cadences survived the quality filter with flag_values = %s'
+                              % (flag_values,))
+
+    #measure the cadence from the data unless the caller named one, so the observed
+    #duration behind the gap corrected index is right for whatever data this is
+    if cadence is None:
+        seconds_per_day = 24 * 60 * 60
+        cadence = np.nanmedian(np.diff(time)) * seconds_per_day
+
+    #################FIND THE FLARES#################
+    #the flags are already handled, so switch that step off downstream
+    if flares is None:
+        flares = detect_flares(time, flux, flux_err, quality, primary_threshold = primary_threshold,
+                               secondary_threshold = secondary_threshold,
+                               num_consec = num_consec, num_consec_sec = num_consec_sec, loss = loss,
+                               rise_bounds = rise_bounds, rise_func = rise_func,
+                               decay_func = decay_func, fit_peak = fit_peak, p0_decay = p0_decay,
+                               decay_bounds = decay_bounds, fit_multiple_secs = fit_multiple_secs,
+                               prim_marginal_threshold = prim_marginal_threshold,
+                               num_below_threshold = num_below_threshold,
+                               min_break = min_break, clip_breaks = clip_breaks, flag_values = None)
+
+    #################CUT DOWN TO THE SQUARE INDEX WINDOW#################
+    if len(flares) == 0:
+        return flares
+    flares = add_square_index(flares, cadence = cadence)
+    selection = select_by_square_index(flares, log_si_min = log_si_min, log_si_max = log_si_max,
+                                       kind = kind, column = column, min_coverage = min_coverage)
+
+    #nothing in the window means nothing to look at, so a loop over many lightcurves
+    #passes over this one in silence
+    if plot == False or len(selection) == 0:
+        return selection
+
+    #################PLOT ONE PANEL PER SELECTED FLARE#################
+    ncols = min(ncols, len(selection))
+    nrows = int(np.ceil(len(selection) / ncols))
+    fig, axs = plt.subplots(nrows, ncols,
+                            figsize = (panel_size[0] * ncols, panel_size[1] * nrows))
+    axs = np.atleast_1d(axs).ravel()
+
+    #the detection threshold, drawn on each panel so it is clear how marginal a flare is
+    one_sigma_percentile = 84
+    flux_std = np.nanpercentile(flux - 1, one_sigma_percentile)
+
+    for ax, (_, flare) in zip(axs, selection.iterrows()):
+        #show the flare with a margin either side, so the local baseline is visible and
+        #it is obvious whether the signature sits on a trend
+        duration = flare['T_end'] - flare['T_start']
+        pad = pad_factor * duration
+        window = (time > flare['T_start'] - pad) & (time < flare['T_end'] + pad)
+        flare_points = (time >= flare['T_start']) & (time <= flare['T_end'])
+
+        ax.errorbar(time[window & ~flare_points], flux[window & ~flare_points],
+                    flux_err[window & ~flare_points], fmt = '.', color = cadence_color)
+        ax.errorbar(time[window & flare_points], flux[window & flare_points],
+                    flux_err[window & flare_points], fmt = '.', color = primary_color)
+        ax.axhline(1 + primary_threshold * flux_std, color = 'grey', linestyle = '--')
+
+        #leave headroom above the data so the label does not sit on top of the flare
+        low, high = ax.get_ylim()
+        ax.set_ylim(low, low + 1.45 * (high - low))
+        ax.set_title('%s  %s' % (flare['Primary_or_Secondary'], round(flare['T_peak'], 4)),
+                     fontsize = fontsize + 1)
+        label = ('log SI = %.2f (obs %.2f)\namp = %.4f (%.1f$\\sigma$)\n'
+                 'dur = %.1f min, cov = %.2f' % (flare['Log_Square_Index'],
+                                                 flare['Log_Square_Index_Obs'],
+                                                 flare['Amplitude'], flare['Amp_Sigma'],
+                                                 duration * 24 * 60, flare['Coverage']))
+        ax.text(0.03, 0.96, label, transform = ax.transAxes, ha = 'left', va = 'top',
+                fontsize = fontsize, bbox = dict(boxstyle = 'round', fc = 'white', alpha = 0.7))
+
+    #blank out any unused panels in the last row
+    for ax in axs[len(selection):]:
+        ax.axis('off')
+
+    if target is not None and sector is not None:
+        name = 'TIC %s, Sector %d' % (target, sector)
+    else:
+        name = 'Light curve'
+    fig.suptitle('%s: %d flares with %s in [%.2f, %.2f]'
+                 % (name, len(selection), column, log_si_min, log_si_max))
+    fig.supxlabel('Time (days)')
+    fig.supylabel('Detrended flux')
+    fig.tight_layout()
+    if savepath is not None:
+        fig.savefig(savepath, dpi = 110, bbox_inches = 'tight')
+    plt.show()
+    #release the figure once it has been drawn, so a loop over many lightcurves does not
+    #accumulate every figure it has ever made in memory
+    plt.close()
+    return selection
